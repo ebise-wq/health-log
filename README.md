@@ -190,8 +190,12 @@ misleading:
   chart lie there is. Position carries the value here rather than length, so a
   truncated axis is fair as long as it is legible.
 
-The Home small multiples still share one fixed 0-100 axis on purpose. There the
-point is comparing rows against each other, which a per-row axis would break.
+The Home rows are zoomed the same way, each row to its own fortnight. They
+have no end labels, because a 30-pixel row cannot carry two readable numbers,
+so the caption says "zoomed" and the figure on the right gives the real value.
+A consequence worth knowing: the bottom of a row is that row's lowest point in
+the window, not zero. For comparing rows against each other on one shared
+axis, Settings → Home screen → Lines draws them on a single 0-100 chart.
 
 ### Why the week score sits high
 
@@ -264,6 +268,14 @@ are still logged and still counted, and the tab shows the count instead.
 date, and comes off the balance. Nothing stops the balance going negative — it
 is a record, not a lock. Purchases merge by id on restore, so restoring an old
 backup cannot wipe spending recorded since.
+
+**Money from before this tracker** is one figure, set at the foot of the
+spending section on the RLHF tab. It is added to the balance and shown as its
+own line under "Where it came from", so the earned total still only counts what
+this app paid. Setting it again replaces it, and 0 or an empty field clears it.
+It is stored inside the pay settings, so it rides along in every backup. A
+backup made before this existed has no such figure, and restoring one keeps the
+amount already set rather than wiping it.
 
 **A win you did not log at the time** can be added to any past day from the
 same tab. It lands in that day's record like any other win, so it exports with

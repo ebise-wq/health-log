@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.25.0";
+var VERSION = "v1.26.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -424,7 +424,7 @@ var state = {
   hidden: {},
   custom: [],
   retired: {},
-  pay: { on: true, win: 0.20, pacing1: 0.25, pacing0: 0.50 },
+  pay: { on: true, win: 0.20, pacing1: 0.25, pacing0: 0.50, start: 0 },
   home: { scores: true, chart: true, pacing: true, done: true, pot: true, backup: true,
           chartStyle: "rows" },
   purchases: []
@@ -461,7 +461,8 @@ function loadStore() {
     state.hidden = parsed.hidden || {};
     state.custom = parsed.custom || [];
     state.retired = parsed.retired || {};
-    state.pay = Object.assign({ on: true, win: 0.20, pacing1: 0.25, pacing0: 0.50 }, parsed.pay || {});
+    state.pay = Object.assign({ on: true, win: 0.20, pacing1: 0.25, pacing0: 0.50, start: 0 },
+      parsed.pay || {});
     state.purchases = parsed.purchases || [];
     state.home = Object.assign({ scores: true, chart: true, pacing: true, done: true,
       pot: true, backup: true, chartStyle: "rows" }, parsed.home || {});
@@ -932,9 +933,16 @@ function spentTotal() {
   return total;
 }
 
+/* Money that was already in the pot before this tracker existed. It lives in
+   state.pay so it rides along in every save, backup and restore without a
+   field of its own. */
+function startTotal() {
+  return Number(state.pay.start) || 0;
+}
+
 /* What is actually left to spend. */
 function potTotal() {
-  return earnedTotal() - spentTotal();
+  return startTotal() + earnedTotal() - spentTotal();
 }
 
 function logWin(date, text) {
@@ -973,12 +981,14 @@ function rewardsScreen() {
       el("span", { class: "score-num pot", text: money ? euro(potTotal()) : String(wins) })
     ]),
     el("div", { class: "score-cap", text: money
-      ? "Earned " + euro(earnedTotal()) + " · spent " + euro(spentTotal())
+      ? (startTotal() ? "Brought in " + euro(startTotal()) + " · earned " : "Earned ")
+        + euro(earnedTotal()) + " · spent " + euro(spentTotal())
       : "Paying for them is switched off in Settings" })
   ]));
 
   if (money) wrap.appendChild(el("div", { class: "section" }, [
     el("h2", { class: "section-head", text: "Where it came from" }),
+    startTotal() ? payLine("From before this tracker", "", startTotal()) : null,
     payLine(wins + (wins === 1 ? " thing done well" : " things done well"),
       wins + " × " + euro(state.pay.win), wins * payWin()),
     payLine(pacing1 + (pacing1 === 1 ? " day pacing at 1" : " days pacing at 1"),
@@ -1048,6 +1058,7 @@ function rewardsScreen() {
     wrap.appendChild(el("div", { class: "note-line",
       text: "Nothing stops you going over — it is a record, not a lock." }));
 
+
     if ((state.purchases || []).length) {
       wrap.appendChild(el("h2", { class: "section-head", text: "Spent" }));
       state.purchases.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; })
@@ -1067,6 +1078,33 @@ function rewardsScreen() {
           ]));
         });
     }
+
+    /* One figure rather than a list: it is what was saved up before the first
+       day logged here. Setting it again replaces it, and 0 clears it. */
+    var startField = el("input", { type: "number", step: "0.05", inputmode: "decimal",
+      class: "hours-field", placeholder: "0.00",
+      value: startTotal() ? startTotal().toFixed(2) : "" });
+    var startMsg = el("div", { class: "msg", style: { display: "none" } });
+    wrap.appendChild(el("h2", { class: "band", text: "From before this tracker" }));
+    wrap.appendChild(el("div", { class: "field-label", text: "Amount already saved (\u20ac)" }));
+    wrap.appendChild(startField);
+    wrap.appendChild(el("div", { class: "spacer" }));
+    wrap.appendChild(el("button", { class: "btn wide raised", type: "button",
+      text: startTotal() ? "Change it" : "Add it to the pot",
+      onclick: function () {
+        var raw = startField.value.trim();
+        var amount = raw === "" ? 0 : parseFloat(raw);
+        if (isNaN(amount)) {
+          startMsg.textContent = "That is not an amount."; startMsg.style.display = ""; return;
+        }
+        state.pay.start = Math.round(amount * 100) / 100;
+        saveNow();
+        pendingMsg = state.pay.start
+          ? "Starting amount set to " + euro(state.pay.start) + "."
+          : "Starting amount cleared.";
+        render();
+      }}));
+    wrap.appendChild(startMsg);
   }
 
   /* ---- what was earned, day by day ---- */
@@ -1513,11 +1551,14 @@ function sparkRows(picked, dates, data) {
   var W = 200, H = 30, pad = 3;
   var ns = "http://www.w3.org/2000/svg";
   var x = function (i) { return pad + (W - pad * 2) * i / (dates.length - 1); };
-  var y = function (v) { return pad + (H - pad * 2) * (1 - v / 100); };
 
   picked.forEach(function (def, si) {
     var colour = SPARK_HUES[si % SPARK_HUES.length];
     var vals = data[si];
+    /* Each row fits its own fortnight, under the same guards as the score
+       panels. Comparing rows on one shared axis is what Lines mode is for. */
+    var b = chartBounds(vals.map(function (v) { return { value: v }; }));
+    var y = function (v) { return pad + (H - pad * 2) * (1 - (v - b.lo) / (b.hi - b.lo)); };
     var svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
     svg.setAttribute("preserveAspectRatio", "none");
@@ -1527,7 +1568,7 @@ function sparkRows(picked, dates, data) {
       Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
       return n;
     }
-    svg.appendChild(node("line", { x1: pad, x2: W - pad, y1: y(0), y2: y(0),
+    svg.appendChild(node("line", { x1: pad, x2: W - pad, y1: y(b.lo), y2: y(b.lo),
       stroke: "#252D36", "stroke-width": 0.8 }));
     var run = [];
     function flush() {
@@ -1677,7 +1718,7 @@ function chart() {
         host.appendChild(sparkRows(picked, dates, data));
       }
       host.appendChild(el("div", { class: "chart-foot" }, [
-        el("span", { class: "item", text: "up is worse · figures are the 7 day average" }),
+        el("span", { class: "item", text: "up is worse · zoomed · 7 day avg" }),
         el("button", { class: "lines", type: "button",
           text: (pickerOpen ? "done" : "choose variables") + " \u203a",
           onclick: function () { pickerOpen = !pickerOpen; paint(); } })
@@ -2590,7 +2631,7 @@ function settingsHome(wrap) {
   });
 
   wrap.appendChild(el("div", { class: "section-head", text: "Chart style" }));
-  [["rows", "Rows", "One small chart per variable. As many as you like."],
+  [["rows", "Rows", "One small chart per variable, each zoomed to its own range. As many as you like."],
    ["lines", "Lines", "All on one chart, so you can see them cross. Three at a time."]]
     .forEach(function (opt) {
       var on = (state.home.chartStyle || "rows") === opt[0];
