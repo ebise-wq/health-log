@@ -759,3 +759,10 @@ input:focus, textarea:focus, button:focus-visible {
   min-height: 44px;
   padding: 0 2px;
 }
+
+/* RLHF: a purchase row keeps its remove on the same line rather than a second
+   one, and the fold at the foot reads as a link, not a section. */
+.spend-row .line { align-items: center; }
+.spend-row .meta { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.spend-row .day-pay { white-space: nowrap; }
+.more-toggle { display: block; margin-top: 12px; }

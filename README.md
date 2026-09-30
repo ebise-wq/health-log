@@ -130,6 +130,33 @@ Two things are deliberately **not** gated. The pot pays a win the moment you
 log it. History still lists today as a draft, since that is what History is
 for.
 
+### When the two scores change
+
+Both scores are read at the last day whose evening was saved (`scoreEnd`), not
+at today's date. They change at exactly two moments:
+
+- **Saving an evening** moves both.
+- **Logging a morning** moves both again. The night is stored on the evening
+  before it, and sleep feeds the PEM predictor as a risk factor and the week
+  score as a symptom.
+
+Nothing else moves them. Reading them at today's date made them drift on their
+own: at midnight the window slid a day and the weights shifted under the same
+data, so the numbers changed overnight with nothing logged — in one test run
+from 74 and 34 to 72 and 53 — and the change that saving an evening made was
+hard to see against that. The pacing row already worked this way.
+
+If an evening is missed, the anchor stays on the last one saved, and the word
+beside each score becomes "as of" that day, so an old number is not passed off
+as a current one. The chart in each panel draws no point after the anchor.
+
+The morning can move PEM down as well as up. The predictor is an average over
+the items it has for a day, so a night better than the rest of that day pulls
+the average down, and a worse one pushes it up. Measured on a day one step over
+baseline on every demand item: a normal night took it from 16 to 12, an awful
+one (quality 0, 3 hours) from 16 to 18. A poor-but-not-awful night landed about
+level with the day, 16 to 15.
+
 ## What Home shows
 
 Settings → **Home screen** turns each block on or off: the scores, the chart,
@@ -264,22 +291,28 @@ The pot is **worked out from the log rather than banked**, so changing an
 amount re-prices every day already recorded. With the money switched off, wins
 are still logged and still counted, and the tab shows the count instead.
 
-**Spending** is recorded on the RLHF tab with an amount, a description and a
-date, and comes off the balance. Nothing stops the balance going negative — it
-is a record, not a lock. Purchases merge by id on restore, so restoring an old
-backup cannot wipe spending recorded since.
+**The RLHF tab** opens on the balance and the record — earning days and
+spending in one list, newest first — because that is what it is opened for.
+Everything used now and then sits folded behind one tap: **Spend** and **Add a
+missed win** are two buttons under the balance, each opening its form in place
+and closing again once used, and **Totals and starting amount** at the foot opens
+the breakdown and the starting amount. Nothing opens as a dialog.
 
-**Money from before this tracker** is one figure, set at the foot of the
-spending section on the RLHF tab. It is added to the balance and shown as its
-own line under "Where it came from", so the earned total still only counts what
-this app paid. Setting it again replaces it, and 0 or an empty field clears it.
-It is stored inside the pay settings, so it rides along in every backup. A
-backup made before this existed has no such figure, and restoring one keeps the
-amount already set rather than wiping it.
+**Spending** takes an amount, a description and a date, and comes off the
+balance. Nothing stops the balance going negative — it is a record, not a lock.
+A purchase can be removed from its row in the record. Purchases merge by id on
+restore, so restoring an old backup cannot wipe spending recorded since.
 
-**A win you did not log at the time** can be added to any past day from the
-same tab. It lands in that day's record like any other win, so it exports with
-everything else.
+**Money from before this tracker** is one figure, set under Totals and starting
+amount. It is added to the balance and shown as its own line in the breakdown,
+so the earned total still only counts what this app paid. Setting it again
+replaces it, and 0 or an empty field clears it. It is stored inside the pay
+settings, so it rides along in every backup. A backup made before this existed
+has no such figure, and restoring one keeps the amount already set rather than
+wiping it.
+
+**A win you did not log at the time** can be added to any past day. It lands in
+that day's record like any other win, so it exports with everything else.
 
 **Did something well** is a plus and a line to write on, one row. Type what it
 was and press the plus, or the return key, and it is logged. A plus pressed on

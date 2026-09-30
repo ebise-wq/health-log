@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.26.0";
+var VERSION = "v1.27.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -886,6 +886,32 @@ function settledEntry(date) {
   return e;
 }
 
+/* The day both scores are read at: the last day whose evening was saved.
+
+   Reading them at today's date instead made them move on their own. At
+   midnight the window slid a day and the weights shifted under the same data,
+   so the numbers changed overnight with nothing logged, and the change that
+   saving an evening made was hard to see against that drift. Anchored here,
+   they change at exactly two moments: when an evening is saved (both scores),
+   and when a morning is logged, because the night is stored on the evening
+   before it and sleep feeds both. The pacing row uses the same idea. */
+function scoreEnd() {
+  var t = today();
+  for (var i = 0; i < 14; i++) {
+    var d = shiftDay(t, -i);
+    if (state.days[d] && state.days[d].complete) return d;
+  }
+  return t;
+}
+
+/* An anchor older than yesterday means an evening was missed, and the number
+   on show is older than it looks. Say so rather than pass it off as current. */
+function staleSince(end) {
+  if (end >= shiftDay(today(), -1)) return null;
+  var p = end.split("-").map(Number);
+  return DAY_NAMES[new Date(p[0], p[1] - 1, p[2]).getDay()];
+}
+
 /* ---------- the pot ---------- */
 
 /* Paid for the two things worth reinforcing: noticing you did something well,
@@ -963,6 +989,13 @@ function removeWin(date, index) {
   saveNow();
 }
 
+/* Which of the tab's occasional panels is open: "spend", "win", "more" or
+   none. Held for the session only. Everything on this tab that is used now and
+   then — recording a purchase, back-filling a win, the totals, the starting
+   amount — sits folded behind one tap, so what shows by default is the balance
+   and the record, which is what the tab is opened for. */
+var rlhfOpen = null;
+
 function rewardsScreen() {
   var wrap = el("div");
   var dates = Object.keys(state.days).sort().reverse();
@@ -975,6 +1008,7 @@ function rewardsScreen() {
   });
 
   var money = state.pay.on;
+  if (!money && (rlhfOpen === "spend" || rlhfOpen === "more")) rlhfOpen = null;
   wrap.appendChild(el("div", { class: "score" }, [
     el("div", { class: "score-label", text: money ? "In the pot" : "Things done well" }),
     el("div", { class: "score-head" }, [
@@ -986,53 +1020,31 @@ function rewardsScreen() {
       : "Paying for them is switched off in Settings" })
   ]));
 
-  if (money) wrap.appendChild(el("div", { class: "section" }, [
-    el("h2", { class: "section-head", text: "Where it came from" }),
-    startTotal() ? payLine("From before this tracker", "", startTotal()) : null,
-    payLine(wins + (wins === 1 ? " thing done well" : " things done well"),
-      wins + " × " + euro(state.pay.win), wins * payWin()),
-    payLine(pacing1 + (pacing1 === 1 ? " day pacing at 1" : " days pacing at 1"),
-      pacing1 + " × " + euro(state.pay.pacing1), pacing1 * payPacing(1)),
-    payLine(pacing0 + (pacing0 === 1 ? " day pacing at 0" : " days pacing at 0"),
-      pacing0 + " × " + euro(state.pay.pacing0), pacing0 * payPacing(0))
-  ]));
-
   if (pendingMsg) {
     wrap.appendChild(el("div", { class: "msg", text: pendingMsg }));
     pendingMsg = "";
   }
 
-  /* ---- add one you did not log at the time ---- */
-  var addMsg = el("div", { class: "msg", style: { display: "none" } });
-  var winDate = el("input", { type: "date", value: today() });
-  var winText = el("input", { type: "text", placeholder: "What was it? (optional)" });
-  wrap.appendChild(el("h2", { class: "band", text: "Add one you missed" }));
-  wrap.appendChild(el("div", { class: "field-label", text: "Day" }));
-  wrap.appendChild(winDate);
-  wrap.appendChild(el("div", { class: "spacer" }));
-  wrap.appendChild(winText);
-  wrap.appendChild(el("div", { class: "spacer" }));
-  wrap.appendChild(el("button", { class: "btn wide raised", type: "button", text: "Add it to that day",
-    onclick: function () {
-      var d = winDate.value;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-        addMsg.textContent = "Pick a day first."; addMsg.style.display = ""; return;
-      }
-      logWin(d, winText.value);
-      pendingMsg = "Added to " + pretty(d) + ".";
-      render();
-    }}));
-  wrap.appendChild(addMsg);
+  /* ---- the occasional actions, one row, each opening in place ---- */
+  var actions = [];
+  if (money) actions.push({ key: "spend", label: "Spend" });
+  actions.push({ key: "win", label: "Add a missed win" });
+  var actionRow = el("div", { class: "tags" });
+  actions.forEach(function (a) {
+    actionRow.appendChild(el("button", { type: "button", text: a.label,
+      "aria-pressed": rlhfOpen === a.key ? "true" : "false",
+      "aria-expanded": rlhfOpen === a.key ? "true" : "false",
+      onclick: function () { rlhfOpen = rlhfOpen === a.key ? null : a.key; render(); } }));
+  });
+  wrap.appendChild(actionRow);
 
-  /* ---- spending ---- */
-  if (money) {
+  if (rlhfOpen === "spend") {
     var buyAmount = el("input", { type: "number", step: "0.05", min: "0", inputmode: "decimal",
       class: "hours-field", placeholder: "0.00" });
     var buyText = el("input", { type: "text", placeholder: "What did you get?" });
     var buyDate = el("input", { type: "date", value: today() });
     var buyMsg = el("div", { class: "msg", style: { display: "none" } });
-    wrap.appendChild(el("h2", { class: "band", text: "Spend from it" }));
-    wrap.appendChild(el("div", { class: "field-label", text: "Amount (\u20ac)" }));
+    wrap.appendChild(el("div", { class: "field-label", text: "Amount (€)" }));
     wrap.appendChild(buyAmount);
     wrap.appendChild(el("div", { class: "spacer" }));
     wrap.appendChild(buyText);
@@ -1051,33 +1063,116 @@ function rewardsScreen() {
           text: buyText.value, amount: Math.round(amount * 100) / 100
         }]);
         saveNow();
+        rlhfOpen = null;
         pendingMsg = "Recorded " + euro(amount) + ".";
         render();
       }}));
     wrap.appendChild(buyMsg);
     wrap.appendChild(el("div", { class: "note-line",
       text: "Nothing stops you going over — it is a record, not a lock." }));
+  }
 
+  if (rlhfOpen === "win") {
+    var addMsg = el("div", { class: "msg", style: { display: "none" } });
+    var winDate = el("input", { type: "date", value: today() });
+    var winText = el("input", { type: "text", placeholder: "What was it? (optional)" });
+    wrap.appendChild(el("div", { class: "field-label", text: "Day" }));
+    wrap.appendChild(winDate);
+    wrap.appendChild(el("div", { class: "spacer" }));
+    wrap.appendChild(winText);
+    wrap.appendChild(el("div", { class: "spacer" }));
+    wrap.appendChild(el("button", { class: "btn wide raised", type: "button", text: "Add it to that day",
+      onclick: function () {
+        var d = winDate.value;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+          addMsg.textContent = "Pick a day first."; addMsg.style.display = ""; return;
+        }
+        logWin(d, winText.value);
+        rlhfOpen = null;
+        pendingMsg = "Added to " + pretty(d) + ".";
+        render();
+      }}));
+    wrap.appendChild(addMsg);
+  }
 
-    if ((state.purchases || []).length) {
-      wrap.appendChild(el("h2", { class: "section-head", text: "Spent" }));
-      state.purchases.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; })
-        .forEach(function (x) {
-          wrap.appendChild(el("div", { class: "day" }, [
-            el("div", { class: "line" }, [
-              el("span", { text: pretty(x.date) + (x.text ? " · " + x.text : "") }),
-              el("span", { class: "meta" }, [
-                el("span", { class: "day-pay", text: "\u2212" + euro(Number(x.amount)) })
-              ])
-            ]),
-            el("button", { class: "quiet-btn", type: "button", text: "remove",
+  /* ---- the record: earning days and spending in one list, newest first ---- */
+  var earning = dates.filter(function (d) {
+    return money ? dayPay(state.days[d]) > 0 : winCount(state.days[d]) > 0;
+  });
+  var rows = earning.map(function (d) { return { date: d, day: d }; });
+  if (money) {
+    (state.purchases || []).forEach(function (x) { rows.push({ date: x.date, buy: x }); });
+  }
+  /* Newest first; on the same date, the spending sits above the earning. */
+  rows.sort(function (a, b) {
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return (a.buy ? 0 : 1) - (b.buy ? 0 : 1);
+  });
+
+  wrap.appendChild(el("h2", { class: "band", text: "Record" }));
+  if (rows.length === 0) {
+    wrap.appendChild(el("div", { class: "hint",
+      text: money
+        ? "Nothing yet. Tap “Did something well” on Home, or log a day paced at 1 or 0."
+        : "Nothing yet. Tap “Did something well” on Home." }));
+  }
+  rows.forEach(function (r) {
+    if (r.buy) {
+      var x = r.buy;
+      wrap.appendChild(el("div", { class: "day spend-row" }, [
+        el("div", { class: "line" }, [
+          el("span", { text: pretty(x.date) + (x.text ? " · " + x.text : "") }),
+          el("span", { class: "meta" }, [
+            el("span", { class: "day-pay", text: "−" + euro(Number(x.amount)) }),
+            el("button", { class: "quiet-btn spend-remove", type: "button", text: "remove",
+              "aria-label": "Remove this purchase",
               onclick: function () {
                 state.purchases = state.purchases.filter(function (y) { return y.id !== x.id; });
                 saveNow(); render();
               }})
-          ]));
-        });
+          ])
+        ])
+      ]));
+      return;
     }
+    var d = r.day, e = state.days[d];
+    var bits = [];
+    if (winCount(e)) bits.push(winCount(e) + (winCount(e) === 1 ? " win" : " wins"));
+    if (pacingPay(e)) bits.push("pacing " + e.v.pacing);
+    var row = el("button", { class: "day", type: "button",
+      onclick: function () { openEvening(d); } }, [
+      el("div", { class: "line" }, [
+        el("span", { text: pretty(d) }),
+        el("span", { class: "meta" }, [
+          el("span", { text: bits.join(" · ") }),
+          money ? el("span", { class: "day-pay", text: euro(dayPay(e)) }) : null
+        ])
+      ])
+    ]);
+    (e.wins || []).forEach(function (w) {
+      if (w.text) row.appendChild(el("div", { class: "win-text", text: "“" + w.text + "”" }));
+    });
+    wrap.appendChild(row);
+  });
+
+  /* ---- totals and the one-off starting amount, folded at the foot ---- */
+  if (money) {
+    wrap.appendChild(el("button", { class: "quiet-btn more-toggle", type: "button",
+      "aria-expanded": rlhfOpen === "more" ? "true" : "false",
+      text: rlhfOpen === "more" ? "Hide totals ‹" : "Totals and starting amount ›",
+      onclick: function () { rlhfOpen = rlhfOpen === "more" ? null : "more"; render(); } }));
+  }
+  if (rlhfOpen === "more") {
+    wrap.appendChild(el("div", { class: "section" }, [
+      el("h2", { class: "section-head", text: "Where it came from" }),
+      startTotal() ? payLine("From before this tracker", "", startTotal()) : null,
+      payLine(wins + (wins === 1 ? " thing done well" : " things done well"),
+        wins + " × " + euro(state.pay.win), wins * payWin()),
+      payLine(pacing1 + (pacing1 === 1 ? " day pacing at 1" : " days pacing at 1"),
+        pacing1 + " × " + euro(state.pay.pacing1), pacing1 * payPacing(1)),
+      payLine(pacing0 + (pacing0 === 1 ? " day pacing at 0" : " days pacing at 0"),
+        pacing0 + " × " + euro(state.pay.pacing0), pacing0 * payPacing(0))
+    ]));
 
     /* One figure rather than a list: it is what was saved up before the first
        day logged here. Setting it again replaces it, and 0 clears it. */
@@ -1085,8 +1180,7 @@ function rewardsScreen() {
       class: "hours-field", placeholder: "0.00",
       value: startTotal() ? startTotal().toFixed(2) : "" });
     var startMsg = el("div", { class: "msg", style: { display: "none" } });
-    wrap.appendChild(el("h2", { class: "band", text: "From before this tracker" }));
-    wrap.appendChild(el("div", { class: "field-label", text: "Amount already saved (\u20ac)" }));
+    wrap.appendChild(el("div", { class: "field-label", text: "Already saved before this tracker (€)" }));
     wrap.appendChild(startField);
     wrap.appendChild(el("div", { class: "spacer" }));
     wrap.appendChild(el("button", { class: "btn wide raised", type: "button",
@@ -1106,41 +1200,6 @@ function rewardsScreen() {
       }}));
     wrap.appendChild(startMsg);
   }
-
-  /* ---- what was earned, day by day ---- */
-  var earning = dates.filter(function (d) {
-    return money ? dayPay(state.days[d]) > 0 : winCount(state.days[d]) > 0;
-  });
-  wrap.appendChild(el("h2", { class: "band", text: "Day by day" }));
-  if (earning.length === 0) {
-    wrap.appendChild(el("div", { class: "hint",
-      text: money
-        ? "Nothing yet. Tap \u201cDid something well\u201d on Home, or log a day paced at 1 or 0."
-        : "Nothing yet. Tap \u201cDid something well\u201d on Home." }));
-  }
-  earning.forEach(function (d) {
-    var e = state.days[d];
-    var bits = [];
-    if (winCount(e)) bits.push(winCount(e) + (winCount(e) === 1 ? " win" : " wins"));
-    if (pacingPay(e)) bits.push("pacing " + e.v.pacing);
-    var row = el("button", { class: "day", type: "button",
-      onclick: function () { openEvening(d); } }, [
-      el("div", { class: "line" }, [
-        el("span", { text: pretty(d) }),
-        el("span", { class: "meta" }, [
-          el("span", { text: bits.join(" · ") }),
-          money ? el("span", { class: "day-pay", text: euro(dayPay(e)) }) : null
-        ])
-      ])
-    ]);
-    (e.wins || []).forEach(function (w) {
-      if (w.text) row.appendChild(el("div", { class: "win-text", text: "\u201c" + w.text + "\u201d" }));
-    });
-    wrap.appendChild(row);
-  });
-
-  wrap.appendChild(el("button", { class: "btn primary", type: "button", text: "Done",
-    onclick: function () { state.tab = "home"; render(); } }));
   return wrap;
 }
 
@@ -1160,7 +1219,7 @@ function payLine(label, sum, amount) {
    number of items counted alongside it, and the shares add up to the points
    the score is down. Nothing here is an approximation of the number on Home. */
 function contributions(kind) {
-  var t = today();
+  var t = scoreEnd();
   /* Derived from the same half life weekScore uses, rather than copied, so the
      two can never drift apart. */
   var weights = LOAD_WEIGHTS;
@@ -1193,11 +1252,13 @@ function contributions(kind) {
 }
 
 /* The score itself, recomputed as it stood at the end of each of the last
-   fourteen days. */
+   fourteen days. Days after the anchor get no point: a score read at a date
+   whose evening is not in yet is the drift scoreEnd exists to avoid. */
 function scoreHistory(kind) {
-  var t = today(), out = [];
+  var t = today(), end = scoreEnd(), out = [];
   for (var i = 13; i >= 0; i--) {
     var d = shiftDay(t, -i);
+    if (d > end) { out.push({ date: d, value: null }); continue; }
     var r = kind === "pem" ? pemRisk(d) : weekScore(d);
     out.push({ date: d, value: kind === "pem" ? r.risk : r.score });
   }
@@ -1297,7 +1358,7 @@ function detailChart(points, colour) {
 
 /* Seven cells of what you actually entered for one item. */
 function itemStrip(key) {
-  var t = today();
+  var t = scoreEnd();
   var strip = el("div", { class: "mini-strip" });
   for (var i = 6; i >= 0; i--) {
     (function (i) {
@@ -1328,7 +1389,7 @@ function itemStrip(key) {
 
 function detailScreen() {
   var kind = state.detail === "pem" ? "pem" : "week";
-  var t = today();
+  var t = scoreEnd();
   var wrap = el("div");
   var now = kind === "pem" ? pemRisk(t) : weekScore(t);
   var value = kind === "pem" ? now.risk : now.score;
@@ -1343,9 +1404,10 @@ function detailScreen() {
       : value >= 70 ? "somewhat below your normal" : "well below your normal"];
   }
 
+  var stale = value === null ? null : staleSince(t);
   var head = el("div", { class: "score-head" }, [
     el("span", { class: "score-num", text: value === null ? "\u2013" : String(value) }),
-    el("span", { class: "score-band", text: band[1] })
+    el("span", { class: "score-band", text: band[1] + (stale ? " \u00b7 as of " + pretty(t) : "") })
   ]);
   head.querySelector(".score-num").style.color = band[0];
   wrap.appendChild(el("div", { class: "score" }, [
@@ -1486,18 +1548,19 @@ function miniScore(label, value, hue, word, onclick) {
 }
 
 function scorePair() {
-  var t = today();
+  var t = scoreEnd();
   var week = weekScore(t);
   var pem = pemRisk(t);
+  var stale = staleSince(t);
   return el("div", { class: "score-pair" }, [
     miniScore("Week score", week.score,
       week.score === null ? "var(--dim)" : scoreHue(week.score),
-      week.score === null ? "not enough days" :
+      week.score === null ? "not enough days" : stale ? "as of " + stale :
         week.score >= 85 ? "near normal" : week.score >= 70 ? "below normal" : "well below",
       function () { state.detail = "week"; state.tab = "detail"; render(); }),
     miniScore("PEM risk", pem.risk,
       pem.risk === null ? "var(--dim)" : scoreHue(100 - pem.risk),
-      pem.risk === null ? "not enough days" :
+      pem.risk === null ? "not enough days" : stale ? "as of " + stale :
         pem.risk <= 20 ? "low" : pem.risk <= 40 ? "raised" : "high",
       function () { state.detail = "pem"; state.tab = "detail"; render(); })
   ]);
@@ -1639,13 +1702,16 @@ function seriesDefs() {
      right is still the score itself. */
   defs.push({
     key: "score:week", label: "Week score", scaleMax: 100, dp: 0,
-    byDate: function (d) { var r = weekScore(d); return r.score === null ? null : 100 - r.score; },
-    numByDate: function (d) { return weekScore(d).score; }
+    byDate: function (d) {
+      if (d > scoreEnd()) return null;
+      var r = weekScore(d); return r.score === null ? null : 100 - r.score;
+    },
+    numByDate: function (d) { return d > scoreEnd() ? null : weekScore(d).score; }
   });
   defs.push({
     key: "score:pem", label: "PEM risk", scaleMax: 100, dp: 0,
-    byDate: function (d) { return pemRisk(d).risk; },
-    numByDate: function (d) { return pemRisk(d).risk; }
+    byDate: function (d) { return d > scoreEnd() ? null : pemRisk(d).risk; },
+    numByDate: function (d) { return d > scoreEnd() ? null : pemRisk(d).risk; }
   });
   defs.push({
     key: "i:sleepHours", label: "Sleep hours", dp: 1, unit: "h",
