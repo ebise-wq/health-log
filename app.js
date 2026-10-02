@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.27.0";
+var VERSION = "v1.28.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -427,7 +427,9 @@ var state = {
   pay: { on: true, win: 0.20, pacing1: 0.25, pacing0: 0.50, start: 0 },
   home: { scores: true, chart: true, pacing: true, done: true, pot: true, backup: true,
           chartStyle: "rows" },
-  purchases: []
+  purchases: [],
+  /* An imported episode log (or null) and changes added here. */
+  episodeLog: { file: null, changes: [] }
 };
 
 /* Mood went from four points to five in v1.9.0, with neutral inserted in the
@@ -464,6 +466,7 @@ function loadStore() {
     state.pay = Object.assign({ on: true, win: 0.20, pacing1: 0.25, pacing0: 0.50, start: 0 },
       parsed.pay || {});
     state.purchases = parsed.purchases || [];
+    state.episodeLog = Object.assign({ file: null, changes: [] }, parsed.episodeLog || {});
     state.home = Object.assign({ scores: true, chart: true, pacing: true, done: true,
       pot: true, backup: true, chartStyle: "rows" }, parsed.home || {});
     rebuildItems();
@@ -481,7 +484,7 @@ function saveNow() {
       version: STORE_VERSION, days: state.days, baselines: state.baselines,
       lastBackupAt: state.lastBackupAt, chartKeys: state.chartKeys,
       hidden: state.hidden, custom: state.custom, retired: state.retired, pay: state.pay,
-      purchases: state.purchases, home: state.home
+      purchases: state.purchases, home: state.home, episodeLog: state.episodeLog
     }));
     if (!state.storeOk) { state.storeOk = true; state.storeMsg = ""; renderBanner(); }
     flash("Saved");
@@ -2732,6 +2735,7 @@ function backupJson() {
     app: "daily-log", version: STORE_VERSION, exportedAt: new Date().toISOString(),
     baselines: state.baselines, hidden: state.hidden, custom: state.custom,
     retired: state.retired, pay: state.pay, purchases: state.purchases,
+    episodeLog: state.episodeLog,
     home: state.home, days: state.days
   }, null, 2);
 }
@@ -2814,6 +2818,16 @@ function restore(parsed) {
     var have = {};
     (state.purchases || []).forEach(function (x) { have[x.id] = true; });
     parsed.purchases.forEach(function (x) { if (!have[x.id]) state.purchases.push(x); });
+  }
+  /* The imported log is one file, so a backup's copy replaces it; changes
+     added here are a list, so they merge by id like purchases. */
+  if (parsed.episodeLog) {
+    if (parsed.episodeLog.file) state.episodeLog.file = parsed.episodeLog.file;
+    var seen = {};
+    (state.episodeLog.changes || []).forEach(function (c) { seen[c.id] = true; });
+    (parsed.episodeLog.changes || []).forEach(function (c) {
+      if (!seen[c.id]) state.episodeLog.changes = (state.episodeLog.changes || []).concat([c]);
+    });
   }
   rebuildItems();
   saveNow();
@@ -2919,6 +2933,832 @@ function historyScreen() {
   return wrap;
 }
 
+/* ---------- episodes ---------- */
+
+/* A timeline of autonomic episodes: the nights logged on the Morning screen,
+   plus a log kept elsewhere and imported from a file.
+
+   The file is read on this phone with FileReader and kept in this phone's
+   storage, like every other record here. It is never sent anywhere — the app
+   makes no network calls — and it is not part of the code, so nothing personal
+   reaches the repository the app is published from. It does go into the JSON
+   backup, because a log that can be wiped is not a log.
+
+   Rows are keyed by the morning date: the night of 3 to 4 March sits on
+   4 March. That is how the imported logs label their rows, and it keeps an
+   evening event ("4 Mar (eve)") and the night after it on different days. */
+
+/* Teal for medication changes and dose nights, purple for the average. Both
+   checked with the palette validator against each other and against every
+   bar colour: the nearest pair is teal against the lightest red, ΔE 8.3 under
+   deuteranopia, and the two overlays also differ in shape — dotted lines with
+   labels against one solid line — so neither leans on colour alone. A blue
+   was tried for the average and sat ΔE 11.3 from the teal: too close. */
+var EP_TEAL = "#4FB3A5", EP_PURPLE = "#9C8FE0";
+
+var EP_MONTH_LONG = ["January", "February", "March", "April", "May", "June", "July",
+  "August", "September", "October", "November", "December"];
+
+var EP_MONTHS = { jan: 1, feb: 2, mar: 3, mrt: 3, maa: 3, apr: 4, may: 5, mei: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, okt: 10, nov: 11, dec: 12 };
+
+/* Markdown down to the words: links keep their text, emphasis goes. */
+function epPlain(s) {
+  return String(s === undefined || s === null ? "" : s)
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\*+|`/g, "")
+    .replace(/\s+/g, " ").trim();
+}
+
+function epYear(text) {
+  var m = String(text).match(/\b(20\d\d)\b/);
+  return m ? Number(m[1]) : new Date().getFullYear();
+}
+
+/* "3–4 Mar", "31 Mar – 1 Apr", "4 Mar (eve)", "12 Mar", "From ~10 Mar".
+   The row date is the last day named, which for a night is the morning
+   after it. A log that runs from December into January only names the year
+   once, so a date that would land well before the previous row moves on a
+   year. */
+function epLabelDate(label, year, prev) {
+  var toks = epPlain(label).toLowerCase().match(/\d{1,2}|[a-z]+/g) || [];
+  var day = null, month = null, lastMonth = null, nums = 0;
+  toks.forEach(function (t) {
+    if (/^\d/.test(t)) { day = Number(t); nums++; month = null; return; }
+    var m = EP_MONTHS[t.slice(0, 3)];
+    if (!m) return;
+    lastMonth = m;
+    if (day !== null && month === null) month = m;
+  });
+  month = month || lastMonth;
+  if (day === null || month === null || day < 1 || day > 31) return null;
+  var date = iso(new Date(year, month - 1, day));
+  if (prev && date < shiftDay(prev, -200)) date = iso(new Date(year + 1, month - 1, day));
+  var part = /\b(eve|evening|avond)\b/i.test(label) ? "eve" : nums >= 2 ? "night" : "day";
+  return { date: date, part: part };
+}
+
+/* "**4 · S**" → 4 with the near-syncope flag; "—" → a night with no score;
+   an empty cell → not a night at all, but a change worth marking. */
+function epScore(cell) {
+  var c = epPlain(cell);
+  if (c === "") return { marker: true };
+  var m = c.match(/^(\d)/);
+  return { v: m ? Math.min(5, Number(m[1])) : null,
+    flag: /(^|[^a-z])s([^a-z]|$)/i.test(c.replace(/^\d/, "")) ? "S" : "" };
+}
+
+/* A change's label is its first clause: the rest goes in its detail. */
+function epShort(text) {
+  var t = epPlain(text).split(/[;.]\s/)[0];
+  return t.length > 70 ? t.slice(0, 67) + "…" : t;
+}
+
+function epTables(text) {
+  var out = [], cur = null;
+  String(text).split(/\r?\n/).forEach(function (ln) {
+    var t = ln.trim();
+    if (t.charAt(0) !== "|") { cur = null; return; }
+    var cells = t.replace(/^\|/, "").replace(/\|\s*$/, "").split("|")
+      .map(function (c) { return c.trim(); });
+    if (!cur) {
+      cur = { head: cells.map(function (h) { return epPlain(h).toLowerCase(); }), rows: [] };
+      out.push(cur);
+      return;
+    }
+    if (cells.every(function (c) { return c === "" || /^:?-{2,}:?$/.test(c); })) return;
+    cur.rows.push(cells);
+  });
+  return out;
+}
+
+function epCol(head, words) {
+  for (var i = 0; i < head.length; i++) {
+    for (var j = 0; j < words.length; j++) if (head[i].indexOf(words[j]) >= 0) return i;
+  }
+  return -1;
+}
+
+/* The log as a Markdown file: a timeline table with a date column, a Score
+   column and a "What happened" column, optionally a Notes column, a Scale
+   table (Score | Definition), and a table of medication changes (Date |
+   Change). Only the timeline is required. */
+function epFromMarkdown(text) {
+  var year = epYear(text);
+  var out = { nights: [], changes: [], doses: [], scale: {} };
+  epTables(text).forEach(function (t) {
+    var sc = epCol(t.head, ["score"]);
+    var def = epCol(t.head, ["definition", "meaning"]);
+    var what = epCol(t.head, ["what", "happen", "description"]);
+    if (sc >= 0 && def >= 0) {
+      t.rows.forEach(function (r) {
+        var k = epPlain(r[sc]).charAt(0);
+        if (/[0-5]/.test(k)) out.scale[k] = epPlain(r[def]);
+      });
+      return;
+    }
+    if (sc >= 0 && what >= 0) {
+      var dc = epCol(t.head, ["night", "date", "day"]);
+      if (dc < 0) dc = 0;
+      var notes = epCol(t.head, ["note", "context"]);
+      var prev = null;
+      t.rows.forEach(function (r) {
+        var d = epLabelDate(r[dc], year, prev);
+        if (!d) return;
+        prev = d.date;
+        var s = epScore(r[sc]);
+        var w = epPlain(r[what]);
+        if (s.marker) { out.changes.push({ date: d.date, text: epShort(w), detail: w }); return; }
+        out.nights.push({ date: d.date, part: d.part, label: epPlain(r[dc]), v: s.v,
+          flag: s.flag, what: w, ctx: notes >= 0 ? epPlain(r[notes]) : "" });
+      });
+      return;
+    }
+    var chg = epCol(t.head, ["change", "medication"]);
+    var dd = epCol(t.head, ["date", "day"]);
+    if (chg >= 0 && dd >= 0) {
+      var p = null;
+      t.rows.forEach(function (r) {
+        var d = epLabelDate(r[dd], year, p);
+        if (!d || !epPlain(r[chg])) return;
+        p = d.date;
+        out.changes.push({ date: d.date, text: epShort(r[chg]), detail: epPlain(r[chg]) });
+      });
+    }
+  });
+  var flag = String(text).match(/flag s[^:\n]*:\**\s*([^\n]+)/i);
+  if (flag) out.scale.S = epPlain(flag[1]);
+  return out;
+}
+
+/* Pull one JavaScript literal out of a page: the text from an opening bracket
+   to its matching close, skipping brackets inside strings. */
+function epLiteral(text, re) {
+  var m = re.exec(text);
+  if (!m) return null;
+  var start = m.index + m[0].length - 1, open = text.charAt(start);
+  var close = open === "[" ? "]" : "}", depth = 0, inStr = false;
+  for (var i = start; i < text.length; i++) {
+    var c = text.charAt(i);
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === inStr) inStr = false;
+      continue;
+    }
+    if (c === "\"" || c === "'") inStr = c;
+    else if (c === open) depth++;
+    else if (c === close && --depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+
+/* The log as a timeline page: its data array (lab, v, flag, what, ctx) and
+   its scale. Markers drawn into such a page are only positions on a drawing,
+   not data, so they cannot come across; add them here, or put them in the
+   Markdown as a Date | Change table. */
+function epFromHtml(text) {
+  var out = { nights: [], changes: [], doses: [], scale: {} };
+  var body = text.indexOf("<body") >= 0 ? text.slice(text.indexOf("<body")) : text;
+  var year = epYear(body);
+  var data = epLiteral(text, /(?:const|var|let)\s+D\s*=\s*\[/);
+  if (!data) return out;
+  var prev = null;
+  JSON.parse(data).forEach(function (r) {
+    var d = epLabelDate(r.lab, year, prev);
+    if (!d) return;
+    prev = d.date;
+    out.nights.push({ date: d.date, part: d.part, label: epPlain(r.lab),
+      v: typeof r.v === "number" ? r.v : null, flag: r.flag === "S" ? "S" : "",
+      what: epPlain(r.what), ctx: epPlain(r.ctx) });
+  });
+  var sc = epLiteral(text, /(?:const|var|let)\s+SC\s*=\s*\{/);
+  if (sc) {
+    try {
+      var obj = JSON.parse(sc);
+      Object.keys(obj).forEach(function (k) {
+        if (/^[0-5S]$/.test(k) && obj[k] && obj[k][3]) out.scale[k] = epPlain(obj[k][3]);
+      });
+    } catch (e) { /* a scale it cannot read is not worth refusing the file over */ }
+  }
+  return out;
+}
+
+/* Whatever came in, keep only what is well formed. A file is data, never
+   code: nothing in it is run or inserted as markup. */
+function epClean(raw) {
+  var okDate = function (d) { return typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d); };
+  var str = function (s, n) { return epPlain(s).slice(0, n || 2000); };
+  var out = { nights: [], changes: [], doses: [], scale: {} };
+  (raw.nights || []).forEach(function (r) {
+    if (!r || !okDate(r.date)) return;
+    var v = typeof r.v === "number" && r.v >= 0 && r.v <= 5 ? Math.round(r.v) : null;
+    out.nights.push({ date: r.date, part: r.part === "eve" || r.part === "day" ? r.part : "night",
+      label: str(r.label, 40), v: v, flag: r.flag === "S" ? "S" : "",
+      what: str(r.what), ctx: str(r.ctx) });
+  });
+  (raw.changes || []).forEach(function (c) {
+    if (c && okDate(c.date) && epPlain(c.text)) {
+      out.changes.push({ date: c.date, text: str(c.text, 80), detail: str(c.detail || "") });
+    }
+  });
+  (raw.doses || []).forEach(function (g) {
+    if (!g || !epPlain(g.name) || !Array.isArray(g.dates)) return;
+    var notes = {};
+    Object.keys(g.notes || {}).forEach(function (d) { if (okDate(d)) notes[d] = str(g.notes[d], 80); });
+    out.doses.push({ name: str(g.name, 40), dates: g.dates.filter(okDate), notes: notes });
+  });
+  Object.keys(raw.scale || {}).forEach(function (k) {
+    if (/^[0-5S]$/.test(k)) out.scale[k] = str(raw.scale[k], 600);
+  });
+  out.nights.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  return out;
+}
+
+function epParse(text, name) {
+  var t = String(text);
+  var parsed;
+  if (/^\s*[{[]/.test(t)) {
+    var j = JSON.parse(t);
+    if (j && j.episodeLog && j.episodeLog.file) parsed = j.episodeLog.file;
+    else if (j && j.nights) parsed = j;
+    else throw new Error("That file has no episode log in it.");
+  } else if (/<html|<script/i.test(t)) {
+    parsed = epFromHtml(t);
+  } else {
+    parsed = epFromMarkdown(t);
+  }
+  var clean = epClean(parsed);
+  if (!clean.nights.length) {
+    throw new Error("Couldn't find any nights in " + (name || "that file") +
+      ". It needs a table with a date, a Score and a What happened column.");
+  }
+  return clean;
+}
+
+/* ---- the merged record ---- */
+
+function epMonthDay(dateStr) {
+  var p = dateStr.split("-").map(Number);
+  return p[2] + " " + MONTH_NAMES[p[1] - 1];
+}
+
+/* "3–4 Mar", or "31 Mar – 1 Apr" across a month. */
+function epNightLabel(evening) {
+  var a = evening.split("-").map(Number), b = shiftDay(evening, 1).split("-").map(Number);
+  return a[1] === b[1]
+    ? a[2] + "–" + b[2] + " " + MONTH_NAMES[b[1] - 1]
+    : epMonthDay(evening) + " – " + epMonthDay(shiftDay(evening, 1));
+}
+
+/* A night logged here sits on the evening before it (that is where the
+   Morning screen writes it), so it moves on a day to land on its morning. The
+   imported log wins where both have the same night: it is the one that was
+   gone over afterwards. */
+function epRows() {
+  var file = state.episodeLog.file;
+  var rows = [], taken = {};
+  if (file) {
+    file.nights.forEach(function (n) {
+      rows.push(Object.assign({ src: "file" }, n));
+      if (n.part !== "eve") taken[n.date] = true;
+    });
+  }
+  Object.keys(state.days).forEach(function (d) {
+    var e = state.days[d];
+    if (!e || !nightIsLogged(e) || e.v.episode === undefined) return;
+    var morning = shiftDay(d, 1);
+    if (taken[morning]) return;
+    rows.push({ src: "app", date: morning, part: "night", label: epNightLabel(d),
+      v: e.v.episode, flag: e.v.syncope === 1 ? "S" : "", what: e.nightNote || "", ctx: "" });
+  });
+  var order = { day: 0, night: 0, eve: 1 };
+  rows.sort(function (a, b) {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return order[a.part] - order[b.part];
+  });
+  return rows;
+}
+
+function epChanges() {
+  var out = [];
+  var file = state.episodeLog.file;
+  if (file) file.changes.forEach(function (c) { out.push(Object.assign({ src: "file" }, c)); });
+  (state.episodeLog.changes || []).forEach(function (c) { out.push(Object.assign({ src: "app" }, c)); });
+  out.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  return out;
+}
+
+/* What the scale numbers mean: the imported log's own definitions where it
+   has them, otherwise the words the Morning screen uses. */
+function epScaleText(k) {
+  var file = state.episodeLog.file;
+  if (file && file.scale && file.scale[k]) return file.scale[k];
+  if (k === "S") return "Near-syncope.";
+  var w = SCALE_EPISODE[Number(k)];
+  return w ? w.charAt(0).toUpperCase() + w.slice(1) + "." : "";
+}
+
+/* One value per day, the worst of that day's rows. Inside the imported log's
+   date range a blank night counts as 0 — the logs this is built for only write
+   a night down when something happened, so skipping blanks would average only
+   the bad ones. Outside it, nights are logged here every morning, and a blank
+   is a night nobody logged, so it is left out. */
+function epDayValues(rows) {
+  var vals = {};
+  rows.forEach(function (r) {
+    if (r.v === null || r.v === undefined) return;
+    vals[r.date] = Math.max(vals[r.date] === undefined ? 0 : vals[r.date], r.v);
+  });
+  var file = state.episodeLog.file;
+  var lo = null, hi = null;
+  if (file && file.nights.length) { lo = file.nights[0].date; hi = file.nights[file.nights.length - 1].date; }
+  return function (d) {
+    if (vals[d] !== undefined) return vals[d];
+    return lo && d >= lo && d <= hi ? 0 : null;
+  };
+}
+
+/* Gaps between the nights that reached 3 or more. */
+function epIntervals(rows) {
+  var dates = [];
+  rows.forEach(function (r) {
+    if (r.v !== null && r.v >= 3 && dates.indexOf(r.date) < 0) dates.push(r.date);
+  });
+  var gaps = [];
+  for (var i = 1; i < dates.length; i++) {
+    gaps.push(Math.round((new Date(dates[i]) - new Date(dates[i - 1])) / 864e5));
+  }
+  return { dates: dates, gaps: gaps };
+}
+
+/* ---- the chart ---- */
+
+var epShow = { changes: true, avg: false, doses: {} };
+var epOpen = null;            /* "import" or "change" — the folded panels */
+var epMsg = "";
+
+/* Words onto lines of about n characters, at most three. */
+function epWrap(text, n) {
+  var lines = [], cur = "";
+  text.split(" ").forEach(function (w) {
+    if (cur && (cur + " " + w).length > n) { lines.push(cur); cur = w; } else cur = cur ? cur + " " + w : w;
+  });
+  if (cur) lines.push(cur);
+  if (lines.length > 3) { lines = lines.slice(0, 3); lines[2] = lines[2].replace(/.$/, "…"); }
+  return lines;
+}
+
+function epChart(rows, changes, doses) {
+  var W = 360, xDate = 33, xDose = 39.5, x0 = 46, U = 26, xS = x0 + 5 * U + 13, xMark = 202;
+  var RH = 13, HEAD = 26, MONTH = 22, GAP = 22, GAPMIN = 7;
+  var ns = "http://www.w3.org/2000/svg";
+  function node(name, attrs, text) {
+    var n = document.createElementNS(ns, name);
+    Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  /* Lay out: a row per event, a thin row per empty day, a single break for a
+     long empty stretch, and a header where the month turns. */
+  var byDate = {};
+  rows.forEach(function (r, i) { (byDate[r.date] = byDate[r.date] || []).push(i); });
+  var first = rows[0].date, last = rows[rows.length - 1].date;
+  var items = [], y = HEAD, month = null, rowY = {}, dayY = {};
+  function monthOf(d) { return d.slice(0, 7); }
+  function addMonth(d) {
+    if (monthOf(d) === month) return;
+    month = monthOf(d);
+    var p = d.split("-").map(Number);
+    items.push({ type: "month", y: y, label: EP_MONTH_LONG[p[1] - 1] + (p[1] === 1 || items.length === 0 ? " " + p[0] : "") });
+    y += MONTH;
+  }
+  for (var d = first; d <= last; d = shiftDay(d, 1)) {
+    if (!byDate[d]) {
+      var run = 0, e = d;
+      while (e <= last && !byDate[e]) { run++; e = shiftDay(e, 1); }
+      if (run >= GAPMIN) {
+        addMonth(d);
+        items.push({ type: "gap", y: y, n: run });
+        for (var g = d; g < e; g = shiftDay(g, 1)) dayY[g] = y + GAP / 2;
+        y += GAP;
+        d = shiftDay(e, -1);
+        continue;
+      }
+      addMonth(d);
+      items.push({ type: "empty", y: y, date: d });
+      dayY[d] = y + RH / 2;
+      y += RH;
+      continue;
+    }
+    addMonth(d);
+    byDate[d].forEach(function (i, k) {
+      items.push({ type: "row", y: y, i: i, first: k === 0 });
+      rowY[i] = y + RH / 2;
+      if (k === 0) dayY[d] = y + RH / 2;
+      y += RH;
+    });
+  }
+  var H = y + 8;
+
+  /* An empty day still gets its date when something is drawn on it. */
+  var marked = {};
+  if (epShow.changes) changes.forEach(function (c) { marked[c.date] = true; });
+  doses.forEach(function (gp) { if (epShow.doses[gp.name]) gp.dates.forEach(function (d) { marked[d] = true; }); });
+
+  var svg = node("svg", { viewBox: "0 0 " + W + " " + H, class: "ep-chart", role: "img",
+    "aria-label": "Episode severity, night by night" });
+
+  /* grid */
+  for (var k = 0; k <= 5; k++) {
+    svg.appendChild(node("line", { x1: x0 + k * U, x2: x0 + k * U, y1: HEAD - 4, y2: H - 4,
+      stroke: k === 0 ? "#3A4550" : "#222A32", "stroke-width": k === 0 ? 1 : 0.6 }));
+  }
+  /* the scale along the top, each number a way into its definition */
+  var keys = ["0", "1", "2", "3", "4", "5", "S"];
+  keys.forEach(function (key, i) {
+    var x = key === "S" ? xS : x0 + i * U;
+    var gEl = node("g", { class: "ep-key", "data-key": key, tabindex: "0", role: "button",
+      "aria-label": key === "S" ? "What S means" : "What " + key + " means" });
+    gEl.appendChild(node("rect", { x: x - 11, y: 0, width: 22, height: HEAD - 4, fill: "transparent" }));
+    if (key === "S") {
+      gEl.appendChild(node("circle", { cx: x, cy: 12, r: 5.5, fill: "none", stroke: RAMP6[4], "stroke-width": 1.2 }));
+      gEl.appendChild(node("text", { x: x, y: 15, "text-anchor": "middle", class: "ep-sflag", fill: RAMP6[4] }, "S"));
+    } else {
+      gEl.appendChild(node("text", { x: x, y: 16, "text-anchor": "middle", class: "ep-ax" }, key));
+    }
+    svg.appendChild(gEl);
+  });
+
+  items.forEach(function (it) {
+    if (it.type === "month") {
+      svg.appendChild(node("line", { x1: 0, x2: W, y1: it.y + 3, y2: it.y + 3, stroke: "#2A333C", "stroke-width": 0.8 }));
+      svg.appendChild(node("text", { x: x0 + 5, y: it.y + 16, class: "ep-month" }, it.label));
+    } else if (it.type === "gap") {
+      svg.appendChild(node("rect", { x: x0 - 4, y: it.y + 2, width: 8, height: GAP - 4, fill: "#171C22" }));
+      svg.appendChild(node("path", { d: "M" + (x0 - 5) + " " + (it.y + 13) + "l10 -5 M" + (x0 - 5) + " " + (it.y + 17) + "l10 -5",
+        stroke: "#5C6873", "stroke-width": 0.9, fill: "none" }));
+      svg.appendChild(node("text", { x: x0 + 9, y: it.y + 15, class: "ep-gap" },
+        it.n + " days, no entries"));
+    } else if (it.type === "empty") {
+      svg.appendChild(node("line", { x1: x0 - 3, x2: x0, y1: it.y + RH / 2, y2: it.y + RH / 2,
+        stroke: "#3A4550", "stroke-width": 1 }));
+      if (marked[it.date]) {
+        svg.appendChild(node("text", { x: xDate, y: it.y + RH / 2 + 3.3, "text-anchor": "end",
+          class: "ep-date ep-date-empty" }, epMonthDay(it.date)));
+      }
+    } else {
+      var r = rows[it.i], cy = it.y + RH / 2;
+      var gRow = node("g", { class: "ep-row", "data-i": String(it.i), tabindex: "0", role: "button",
+        "aria-label": r.label + ", " + (r.v === null ? "not scored" : "score " + r.v) + (r.flag ? ", near-syncope" : "") });
+      gRow.appendChild(node("rect", { x: 0, y: it.y, width: W, height: RH, fill: "transparent" }));
+      gRow.appendChild(node("rect", { class: "ep-sel", x: x0 - 2, y: it.y + 0.5, width: (r.v ? r.v * U : 6) + 4,
+        height: RH - 1, rx: 2.5, fill: "none", stroke: "#C6CED6", "stroke-width": 1.1 }));
+      if (it.first) {
+        gRow.appendChild(node("text", { x: xDate, y: cy + 3.3, "text-anchor": "end", class: "ep-date" },
+          epMonthDay(r.date)));
+      }
+      if (r.v === null) {
+        gRow.appendChild(node("text", { x: x0 + 4, y: cy + 3.3, class: "ep-date" }, "–"));
+      } else {
+        var fill = RAMP6[r.v];
+        gRow.appendChild(node("rect", { x: x0, y: cy - 4.5, width: r.v ? r.v * U : 3, height: 9, rx: 1.5, fill: fill }));
+        /* Numbers only on the nights that matter most, not on every bar. */
+        if (r.v >= 3) {
+          gRow.appendChild(node("text", { x: x0 + r.v * U - 4, y: cy + 3.3, "text-anchor": "end",
+            class: "ep-val", fill: INK[fill] || "#14181C" }, String(r.v)));
+        }
+      }
+      if (r.flag === "S") {
+        gRow.appendChild(node("circle", { cx: xS, cy: cy, r: 5, fill: "#171C22", stroke: RAMP6[4], "stroke-width": 1.1 }));
+        gRow.appendChild(node("text", { x: xS, y: cy + 2.8, "text-anchor": "middle", class: "ep-sflag", fill: RAMP6[4] }, "S"));
+      }
+      svg.appendChild(gRow);
+    }
+  });
+
+  /* dose nights: a ring beside the date */
+  doses.forEach(function (gp) {
+    if (!epShow.doses[gp.name]) return;
+    gp.dates.forEach(function (d) {
+      if (dayY[d] === undefined) return;
+      svg.appendChild(node("circle", { cx: xDose, cy: dayY[d], r: gp.notes[d] ? 2.9 : 2.2,
+        fill: "none", stroke: EP_TEAL, "stroke-width": 1.1 }));
+      if (gp.notes[d]) svg.appendChild(node("circle", { cx: xDose, cy: dayY[d], r: 1, fill: EP_TEAL }));
+    });
+  });
+
+  /* 7-day average */
+  if (epShow.avg) {
+    var val = epDayValues(rows), pts = [], lines = [];
+    var flushAvg = function () { if (pts.length > 1) lines.push(pts); pts = []; };
+    items.forEach(function (it) {
+      if (it.type === "gap") { flushAvg(); return; }
+      if (it.type === "month") return;
+      if (it.type === "row" && !it.first) return;
+      var date = it.type === "empty" ? it.date : rows[it.i].date;
+      var sum = 0, n = 0;
+      for (var b = 0; b < 7; b++) {
+        var v = val(shiftDay(date, -b));
+        if (v !== null) { sum += v; n++; }
+      }
+      if (n < 4) { flushAvg(); return; }
+      pts.push((x0 + (sum / n) * U).toFixed(1) + "," + (it.y + RH / 2).toFixed(1));
+    });
+    flushAvg();
+    lines.forEach(function (p) {
+      svg.appendChild(node("polyline", { points: p.join(" "), fill: "none", stroke: EP_PURPLE,
+        "stroke-width": 1.6, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    });
+  }
+
+  /* medication changes: a dot on the axis, a dotted lead to a label in the
+     clear space to the right, nudged down when two would collide */
+  if (epShow.changes) {
+    /* The lead starts where that day's bar ends, so it never runs through a
+       bar or the number on it. */
+    var barEnd = {};
+    rows.forEach(function (r) {
+      var end = x0 + (r.v ? r.v * U : r.v === 0 ? 3 : 8);
+      barEnd[r.date] = Math.max(barEnd[r.date] || x0, end);
+    });
+    var nextFree = 0;
+    changes.forEach(function (c, ci) {
+      if (dayY[c.date] === undefined) return;
+      var cy = dayY[c.date];
+      var lines = epWrap(c.text, 30);
+      /* The next label starts a full line below this one's last line. */
+      var ly = Math.max(cy, nextFree);
+      nextFree = ly + lines.length * 10.5 + 1;
+      var gC = node("g", { class: "ep-change", "data-c": String(ci), tabindex: "0", role: "button",
+        "aria-label": "Change on " + epMonthDay(c.date) + ": " + c.text });
+      gC.appendChild(node("rect", { x: xMark - 6, y: ly - 8, width: W - xMark + 6,
+        height: lines.length * 10.5 + 6, fill: "transparent" }));
+      gC.appendChild(node("line", { x1: (barEnd[c.date] || x0) + 3, y1: cy, x2: xMark - 5, y2: ly, stroke: EP_TEAL,
+        "stroke-width": 0.8, "stroke-dasharray": "2 2.4" }));
+      gC.appendChild(node("circle", { cx: x0, cy: cy, r: 2.3, fill: EP_TEAL }));
+      var tx = node("text", { x: xMark, y: ly + 3.4, class: "ep-mark", fill: EP_TEAL });
+      lines.forEach(function (ln, li) {
+        tx.appendChild(node("tspan", { x: xMark, dy: li ? 10.5 : 0 }, ln));
+      });
+      gC.appendChild(tx);
+      svg.appendChild(gC);
+    });
+  }
+  return { svg: svg, H: H };
+}
+
+/* ---- the screen ---- */
+
+function epScreen() {
+  var wrap = el("div");
+  var rows = epRows(), changes = epChanges();
+  var file = state.episodeLog.file;
+  var doses = file ? file.doses : [];
+
+  if (epMsg) { wrap.appendChild(el("div", { class: "msg", text: epMsg })); epMsg = ""; }
+
+  if (!rows.length) {
+    wrap.appendChild(el("div", { class: "hint",
+      text: "No episodes yet. Nights you log on the Morning screen land here, and a log kept elsewhere can be imported below." }));
+    if (!epOpen) epOpen = "import";
+  } else {
+    epChartSection(wrap, rows, changes, doses);
+  }
+  epActions(wrap, file);
+  return wrap;
+}
+
+function epChartSection(wrap, rows, changes, doses) {
+    /* toggles */
+    var chips = el("div", { class: "tags" });
+    var chip = function (label, on, flip) {
+      chips.appendChild(el("button", { type: "button", text: label, "aria-pressed": on ? "true" : "false",
+        onclick: function () { flip(); render(true); } }));
+    };
+    if (changes.length) chip("Medication changes", epShow.changes, function () { epShow.changes = !epShow.changes; });
+    doses.forEach(function (gp) {
+      chip(gp.name + " nights", !!epShow.doses[gp.name], function () { epShow.doses[gp.name] = !epShow.doses[gp.name]; });
+    });
+    chip("7-day average", epShow.avg, function () { epShow.avg = !epShow.avg; });
+    wrap.appendChild(chips);
+
+    var chart = epChart(rows, changes, doses);
+    var box = el("div", { class: "ep-wrap" });
+    box.appendChild(chart.svg);
+    var panel = el("div", { class: "ep-panel", style: { display: "none" } });
+    box.appendChild(panel);
+    wrap.appendChild(box);
+
+    var scored = rows.map(function (r, i) { return i; });
+    var current = null;
+
+    function chipFor(v, flag) {
+      var c = el("span", { class: "ep-chip", text: v === null || v === undefined ? "–" : String(v) });
+      if (v !== null && v !== undefined) { c.style.background = RAMP6[v]; c.style.color = INK[RAMP6[v]] || "#14181C"; }
+      return c;
+    }
+    function place(target) {
+      var br = box.getBoundingClientRect(), tr = target.getBoundingClientRect();
+      panel.style.display = "";
+      var ph = panel.offsetHeight, top = tr.bottom - br.top + 6;
+      if (top + ph > box.offsetHeight && tr.top - br.top - ph - 6 >= 0) top = tr.top - br.top - ph - 6;
+      panel.style.top = Math.max(0, top) + "px";
+    }
+    function mark(i) {
+      Array.prototype.forEach.call(chart.svg.querySelectorAll(".ep-row"), function (g) {
+        g.classList.toggle("on", Number(g.getAttribute("data-i")) === i);
+      });
+    }
+    function close() { panel.style.display = "none"; current = null; mark(-1); }
+    function closeBtn() {
+      return el("button", { class: "ep-x", type: "button", text: "×", "aria-label": "Close", onclick: close });
+    }
+    function showRow(i) {
+      current = i;
+      var r = rows[i];
+      panel.innerHTML = "";
+      panel.appendChild(el("div", { class: "ep-top" }, [
+        chipFor(r.v),
+        el("span", { class: "ep-label", text: r.label || epMonthDay(r.date) }),
+        r.flag === "S" ? el("span", { class: "ep-s", text: "S" }) : null,
+        closeBtn()
+      ]));
+      if (r.v === null) panel.appendChild(el("div", { class: "ep-ctx", text: "Not scored." }));
+      if (r.what) panel.appendChild(el("p", { class: "ep-what", text: r.what }));
+      if (r.ctx) panel.appendChild(el("p", { class: "ep-ctx", text: r.ctx }));
+      if (r.flag === "S") panel.appendChild(el("p", { class: "ep-ctx", text: "S: " + epScaleText("S") }));
+      panel.appendChild(el("div", { class: "ep-src",
+        text: r.src === "app" ? "From the Morning log" : "From the imported log" }));
+      var at = scored.indexOf(i);
+      var earlier = el("button", { class: "btn raised", type: "button", text: "‹ Earlier",
+        onclick: function () { if (at > 0) go(scored[at - 1]); } });
+      var later = el("button", { class: "btn raised", type: "button", text: "Later ›",
+        onclick: function () { if (at < scored.length - 1) go(scored[at + 1]); } });
+      if (at <= 0) earlier.disabled = true;
+      if (at >= scored.length - 1) later.disabled = true;
+      panel.appendChild(el("div", { class: "ep-steps" }, [earlier, later]));
+      mark(i);
+      var g = chart.svg.querySelector('.ep-row[data-i="' + i + '"]');
+      place(g);
+    }
+    function go(i) {
+      showRow(i);
+      var g = chart.svg.querySelector('.ep-row[data-i="' + i + '"]');
+      if (g && g.scrollIntoView) g.scrollIntoView({ block: "nearest" });
+      panel.scrollIntoView && panel.scrollIntoView({ block: "nearest" });
+    }
+    function showKey(k, g) {
+      current = null; mark(-1);
+      panel.innerHTML = "";
+      var c = k === "S" ? el("span", { class: "ep-s", text: "S" }) : chipFor(Number(k));
+      panel.appendChild(el("div", { class: "ep-top" }, [c, el("span", { class: "ep-label", text: "Scale" }), closeBtn()]));
+      panel.appendChild(el("p", { class: "ep-what", text: epScaleText(k) }));
+      place(g);
+    }
+    function showChange(ci, g) {
+      current = null; mark(-1);
+      var c = changes[ci];
+      panel.innerHTML = "";
+      panel.appendChild(el("div", { class: "ep-top" }, [
+        el("span", { class: "ep-dot" }),
+        el("span", { class: "ep-label", text: epMonthDay(c.date) }), closeBtn()]));
+      panel.appendChild(el("p", { class: "ep-what", text: c.detail || c.text }));
+      panel.appendChild(el("div", { class: "ep-src",
+        text: c.src === "app" ? "Added here" : "From the imported log" }));
+      place(g);
+    }
+    chart.svg.addEventListener("click", function (ev) {
+      var g = ev.target.closest ? ev.target.closest(".ep-row, .ep-key, .ep-change") : null;
+      if (!g) return;
+      if (g.classList.contains("ep-key")) { showKey(g.getAttribute("data-key"), g); return; }
+      if (g.classList.contains("ep-change")) { showChange(Number(g.getAttribute("data-c")), g); return; }
+      var i = Number(g.getAttribute("data-i"));
+      if (current === i) close(); else showRow(i);
+    });
+    chart.svg.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      ev.target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    wrap.appendChild(el("div", { class: "strip-cap",
+      text: "Tap a night, a number or a change for the detail." +
+        (epShow.avg ? " The average counts blank nights in the imported log as 0." : "") }));
+
+    var iv = epIntervals(rows);
+    if (iv.gaps.length) {
+      var lastHigh = iv.dates[iv.dates.length - 1];
+      var since = Math.round((new Date(today()) - new Date(lastHigh)) / 864e5);
+      wrap.appendChild(el("h2", { class: "section-head ep-gap-head", text: "Gaps between nights of 3 or more" }));
+      wrap.appendChild(el("div", { class: "ep-iv", text: iv.gaps.join(" · ") + " days" }));
+      wrap.appendChild(el("div", { class: "note-line ep-left",
+        text: "Last one " + epMonthDay(lastHigh) + ", " + since + (since === 1 ? " day ago." : " days ago.") }));
+    }
+}
+
+/* Importing and adding changes are occasional, so they sit folded at the
+   foot, one tap away, the same way the RLHF tab handles its forms. */
+function epActions(wrap, file) {
+  var acts = el("div", { class: "tags ep-acts" });
+  [["import", file ? "Imported log" : "Import a log"], ["change", "Add a medication change"]].forEach(function (a) {
+    acts.appendChild(el("button", { type: "button", text: a[1],
+      "aria-pressed": epOpen === a[0] ? "true" : "false", "aria-expanded": epOpen === a[0] ? "true" : "false",
+      onclick: function () { epOpen = epOpen === a[0] ? null : a[0]; render(true); } }));
+  });
+  wrap.appendChild(acts);
+
+  if (epOpen === "import") {
+    var msg = el("div", { class: "msg", style: { display: "none" } });
+    var input = el("input", { type: "file", id: "ep-file", class: "hidden-file",
+      accept: ".md,.markdown,.txt,.html,.htm,.json,text/markdown,text/plain,text/html,application/json" });
+    input.addEventListener("change", function () {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      if (f.size > 2e6) { msg.textContent = "That file is too big to be a log."; msg.style.display = ""; return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var log = epParse(reader.result, f.name);
+          log.name = f.name;
+          log.importedAt = new Date().toISOString();
+          state.episodeLog.file = log;
+          saveNow();
+          epOpen = null;
+          epMsg = "Imported " + log.nights.length + " nights" +
+            (log.changes.length ? " and " + log.changes.length + (log.changes.length === 1 ? " change" : " changes") : "") + ".";
+          render();
+        } catch (err) {
+          msg.textContent = err && err.message && !/JSON|Unexpected/.test(err.message)
+            ? err.message : "Couldn't read that file.";
+          msg.style.display = "";
+        }
+      };
+      reader.readAsText(f);
+    });
+    wrap.appendChild(input);
+    if (file) {
+      wrap.appendChild(el("div", { class: "day" }, [
+        el("div", { class: "line" }, [
+          el("span", { text: file.name }),
+          el("span", { class: "meta" }, [
+            el("span", { text: file.nights.length + " nights · " + pretty(iso(new Date(file.importedAt))) }),
+            el("button", { class: "quiet-btn", type: "button", text: "remove",
+              onclick: function () {
+                state.episodeLog.file = null; saveNow();
+                epMsg = "Imported log removed. Nights logged here are untouched."; render(true);
+              }})
+          ])
+        ])
+      ]));
+    }
+    wrap.appendChild(el("div", { class: "note-line ep-left",
+      text: "Read on this phone and kept on it. Nothing is uploaded." }));
+    wrap.appendChild(el("label", { class: "btn raised wide file-btn", for: "ep-file",
+      text: file ? "Import a newer version" : "Choose a .md, .html or .json file" }));
+    if (file) wrap.appendChild(el("div", { class: "note-line ep-left",
+      text: "A new file replaces this one. Nights logged here are never touched." }));
+    wrap.appendChild(msg);
+  }
+
+  if (epOpen === "change") {
+    var cDate = el("input", { type: "date", value: today() });
+    var cText = el("input", { type: "text", placeholder: "What changed? e.g. new dose, stopped something" });
+    var cMsg = el("div", { class: "msg", style: { display: "none" } });
+    wrap.appendChild(el("div", { class: "field-label", text: "Day" }));
+    wrap.appendChild(cDate);
+    wrap.appendChild(el("div", { class: "spacer" }));
+    wrap.appendChild(cText);
+    wrap.appendChild(el("div", { class: "spacer" }));
+    wrap.appendChild(el("button", { class: "btn wide raised", type: "button", text: "Add it",
+      onclick: function () {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(cDate.value) || !cText.value.trim()) {
+          cMsg.textContent = "A day and a few words, please."; cMsg.style.display = ""; return;
+        }
+        state.episodeLog.changes = (state.episodeLog.changes || []).concat([{
+          id: "m" + Date.now().toString(36), date: cDate.value, text: cText.value.trim().slice(0, 80) }]);
+        saveNow();
+        epMsg = "Added " + cText.value.trim() + " on " + epMonthDay(cDate.value) + ".";
+        render(true);
+      }}));
+    wrap.appendChild(cMsg);
+    (state.episodeLog.changes || []).slice().reverse().forEach(function (c) {
+      wrap.appendChild(el("div", { class: "day spend-row" }, [
+        el("div", { class: "line" }, [
+          el("span", { text: epMonthDay(c.date) + " · " + c.text }),
+          el("span", { class: "meta" }, [
+            el("button", { class: "quiet-btn spend-remove", type: "button", text: "remove",
+              onclick: function () {
+                state.episodeLog.changes = state.episodeLog.changes.filter(function (x) { return x.id !== c.id; });
+                saveNow(); render(true);
+              }})
+          ])
+        ])
+      ]));
+    });
+  }
+}
+
 /* ---------- shell ---------- */
 
 /* Evening and Morning are not permanent tabs. You reach them from Home, and
@@ -2929,9 +3769,15 @@ function renderTabs() {
   var nav = document.getElementById("tabs");
   nav.innerHTML = "";
   var tabs = TABS.slice();
+  /* Episodes is a tab for anyone tracking them: shown unless the episode item
+     is hidden and nothing has been imported. */
+  if (!isHidden("episode") || state.episodeLog.file) tabs.splice(2, 0, ["episodes", "Episodes"]);
   if (state.tab === "evening") tabs.splice(1, 0, ["evening", "Evening"]);
   if (state.tab === "detail") tabs.splice(1, 0, ["detail", "Score"]);
   if (state.tab === "morning") tabs.splice(1, 0, ["morning", "Morning"]);
+  /* Six tabs only fit if each takes the width its word needs rather than an
+     equal share, at a slightly smaller size. */
+  nav.classList.toggle("many", tabs.length > 5);
   tabs.forEach(function (t) {
     nav.appendChild(el("button", {
       type: "button", role: "tab", text: t[1],
@@ -2967,6 +3813,7 @@ function render(keepScroll) {
   else if (state.tab === "rlhf") main.appendChild(rewardsScreen());
   else if (state.tab === "detail") main.appendChild(detailScreen());
   else if (state.tab === "baseline") main.appendChild(baselineScreen());
+  else if (state.tab === "episodes") main.appendChild(epScreen());
   else main.appendChild(historyScreen());
   if (!keepScroll) window.scrollTo(0, 0);
 }

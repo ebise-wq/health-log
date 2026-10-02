@@ -333,6 +333,83 @@ rather have the Dutch format.
 
 Wins export as `Done well` rows, one per win, carrying the text.
 
+## Episodes
+
+A timeline of autonomic episodes, one row per night, scored 0 to 5 with an S
+flag for near-syncope. It draws on two sources:
+
+- **Nights logged on the Morning screen.** The "Dysautonomic episode" and
+  "Near-syncope" items already there feed it, so it fills in as you go.
+- **A log kept elsewhere, imported from a file.** For history from before this
+  app, or a log that someone goes over afterwards.
+
+Where both have the same night, the imported one is shown: it is the one that
+was reviewed. Importing again replaces the earlier import whole; nights logged
+here are never touched by an import or by removing one.
+
+### Your data stays on the phone
+
+The file is picked on the phone and read there with `FileReader`. It is stored
+in the phone's browser storage with everything else, and goes into the JSON
+backup so it survives a wipe. **Nothing is uploaded**: the app makes no network
+calls, and the service worker only serves the app's own files. The log is never
+part of the code either, so nothing personal reaches the repository the app is
+published from. Keep your log files out of this repository.
+
+### What it reads
+
+- **Markdown (.md)** — a table with a date column, a Score column and a "What
+  happened" column, plus an optional Notes column. A score cell is a digit,
+  optionally followed by S (`4 · S`); `—` is a night with no score; an empty
+  score cell makes the row a marker instead (a change worth showing on the
+  timeline). Two optional tables are picked up too: a scale (`Score |
+  Definition`) and medication changes (`Date | Change`). A line beginning
+  `Flag S` gives the S definition.
+- **A timeline page (.html)** with its data in a `D` array of `{lab, v, flag,
+  what, ctx}` and its scale in `SC`. Anything drawn into such a page only as
+  positions on the drawing — medication markers, dose rings — cannot come
+  across, because it is not data.
+- **JSON (.json)** in the app's own shape: `{"kind": "episodes", "nights":
+  [...], "changes": [...], "doses": [...], "scale": {...}}`, or a full backup
+  from this app. This is the only format that carries dose nights.
+
+Dates like `3–4 Mar` are a night and sit on the morning after it, `4 Mar
+(eve)` is an evening event on that day, and a single date is that day. The year
+is the first one the file mentions, and a log that runs from December into
+January moves on a year by itself. English and Dutch month names both work.
+Everything is cleaned on the way in: text is kept as text and never run or
+inserted as markup.
+
+### What it shows
+
+Bars run 0 to 5 in the same colours as the Morning screen, with the number
+written on nights of 3 and over only. Empty days are a tick on the axis; seven
+or more empty days in a row fold into one line saying how many. Tapping a
+night opens its description beside it, with Earlier and Later at full touch
+size, because the rows are too dense to aim at one-handed. Tapping a number
+along the top gives its definition, from the imported log's own scale where
+it has one.
+
+Three overlays, each a toggle: **medication changes** (a dot on the axis and a
+dotted lead to a label), **dose nights** where the file has them (a ring by the
+date), and a **7-day average** (off by default). Teal for the first two and
+purple for the average, checked with the palette validator against each other
+and against every bar colour; a blue average sat too close to the teal and was
+dropped. Under the chart, the gaps in days between nights of 3 or more, and how
+long since the last.
+
+The average counts a blank night inside the imported log's date range as 0,
+because such logs only write a night down when something happened, so
+skipping blanks would average only the bad ones. Outside that range, nights are
+logged here every morning and a blank is a night nobody logged, so it is left
+out.
+
+Medication changes can also be added on the tab, with a day and a few words.
+They are kept with the backup and merge by id on restore.
+
+The tab shows unless the episode item is hidden in Settings and nothing has
+been imported.
+
 ## The week score
 
 One number, 0-100, for the last seven days. **100 is a day at your normal.** It
