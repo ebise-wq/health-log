@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.28.0";
+var VERSION = "v1.29.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -335,7 +335,10 @@ var DEFAULT_BASELINES = {
   physical: 1, orthostatic: 1, mental: 1, social: 1, emotional: 0, pacing: 1,
   sleep: 2, episode: 0, syncope: 0,
   /* Not a 0-3 rating: the hours you normally need. Only shortfall counts. */
-  hoursTarget: 8
+  hoursTarget: 8,
+  /* Not a rating either: how many days after a day's PEM risk its PEM is
+     drawn on the predictor panel. */
+  pemLag: 1
 };
 
 var TAGS = ["episode", "visitor", "extra med", "bad night", "GI", "heat", "appointment"];
@@ -1261,11 +1264,31 @@ function scoreHistory(kind) {
   var t = today(), end = scoreEnd(), out = [];
   for (var i = 13; i >= 0; i--) {
     var d = shiftDay(t, -i);
-    if (d > end) { out.push({ date: d, value: null }); continue; }
-    var r = kind === "pem" ? pemRisk(d) : weekScore(d);
-    out.push({ date: d, value: kind === "pem" ? r.risk : r.score });
+    var p = { date: d, value: null };
+    if (d <= end) {
+      var r = kind === "pem" ? pemRisk(d) : weekScore(d);
+      p.value = kind === "pem" ? r.risk : r.score;
+    }
+    if (kind === "pem") { p.laterDate = shiftDay(d, pemLag()); p.later = pemOn(p.laterDate); }
+    out.push(p);
   }
   return out;
+}
+
+/* How many days after a day's risk its PEM is drawn. PEM usually lands 12 to
+   48 hours after the exertion behind it, so a day is the default; Settings
+   moves it. */
+function pemLag() {
+  var n = Number(state.baselines.pemLag);
+  return isNaN(n) ? DEFAULT_BASELINES.pemLag : Math.max(0, Math.min(5, Math.round(n)));
+}
+
+/* The PEM you logged on a day, or null if that day has not stood behind it. */
+function pemOn(date) {
+  if (isHidden("pem")) return null;
+  var e = settledEntry(date);
+  if (!e || !itemCounts(e, "pem") || e.v.pem === undefined) return null;
+  return e.v.pem;
 }
 
 /* One line, fourteen points, fixed 0-100. A single series needs no legend —
@@ -1310,53 +1333,197 @@ function chartBounds(points) {
   return { lo: lo, hi: hi };
 }
 
-function detailChart(points, colour) {
-  var W = 320, H = 100, padL = 26, padR = 6, padT = 10, padB = 10;
-  var plotW = W - padL - padR, plotH = H - padT - padB;
+/* The score over a fortnight, with dates along the bottom and a readout for
+   any day: hover on a computer, tap on the phone (tap again to close), or the
+   arrow keys once the chart has focus.
+
+   On the PEM predictor it has a second band underneath: the PEM you logged,
+   drawn under the day whose risk it would answer — so with a one-day delay,
+   Tuesday's risk sits over Wednesday's PEM, and a warning that came true shows
+   as the two lines rising together. A band of its own rather than a second
+   line on the same axis, because one is 0-100 and the other is 0-3, and two
+   scales on one axis invent a relationship that is not there. Both bands share
+   the dates and the crosshair. */
+function detailChart(points, colour, opts) {
+  opts = opts || {};
+  var lower = !!opts.lower && !isHidden("pem");
+  var W = 320, padL = 26, padR = 8;
+  var plotW = W - padL - padR;
+  var topY = lower ? 16 : 10, topH = lower ? 72 : 80;
+  var lowY = topY + topH + 22, lowH = 34;
+  var axisY = (lower ? lowY + lowH : topY + topH) + 13;
+  var H = axisY + 14;
+  var n = points.length;
   var b = chartBounds(points);
   var span = b.hi - b.lo;
-  var x = function (i) { return padL + (plotW * i) / (points.length - 1); };
-  var y = function (v) { return padT + plotH * (1 - (v - b.lo) / span); };
+  var x = function (i) { return padL + (plotW * i) / (n - 1); };
+  var yT = function (v) { return topY + topH * (1 - (v - b.lo) / span); };
+  var yL = function (v) { return lowY + lowH * (1 - v / 3); };
+  var later = SERIES_DETAIL.week;
   var ns = "http://www.w3.org/2000/svg";
   var svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 " + W + " " + H);
   svg.setAttribute("class", "chart");
-  function node(name, attrs) {
-    var n = document.createElementNS(ns, name);
-    Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
-    return n;
+  svg.setAttribute("tabindex", "0");
+  svg.setAttribute("role", "group");
+  svg.setAttribute("aria-label", (opts.name || "Score") + ", last 14 days. Arrow keys move between days.");
+  function node(name, attrs, text) {
+    var el2 = document.createElementNS(ns, name);
+    Object.keys(attrs).forEach(function (k) { el2.setAttribute(k, attrs[k]); });
+    if (text !== undefined) el2.textContent = text;
+    return el2;
   }
+  /* Anywhere on the chart is a target: the pointer picks the nearest day. */
+  svg.appendChild(node("rect", { x: 0, y: 0, width: W, height: H, fill: "transparent" }));
+
   [b.lo, (b.lo + b.hi) / 2, b.hi].forEach(function (v, i) {
-    svg.appendChild(node("line", { x1: padL, x2: padL + plotW, y1: y(v), y2: y(v),
+    svg.appendChild(node("line", { x1: padL, x2: padL + plotW, y1: yT(v), y2: yT(v),
       stroke: "#252D36", "stroke-width": i === 0 ? 1 : 0.5 }));
   });
   /* Only the two ends are labelled. A number on the middle rule as well is one
      more thing to read at 2am for nothing. */
   [b.lo, b.hi].forEach(function (v) {
-    var t = node("text", { x: padL - 5, y: y(v) + 3, "text-anchor": "end",
-      "font-size": 9, fill: "#77828E" });
-    t.textContent = String(v);
-    svg.appendChild(t);
+    svg.appendChild(node("text", { x: padL - 5, y: yT(v) + 3, "text-anchor": "end",
+      "font-size": 9, fill: "#77828E" }, String(v)));
   });
-  var run = [];
-  function flush() {
-    if (run.length > 1) {
-      svg.appendChild(node("path", { d: "M" + run.map(function (p) { return p[0] + " " + p[1]; }).join("L"),
-        fill: "none", stroke: colour, "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
-    }
-    run = [];
+  if (lower) {
+    var lag = pemLag();
+    svg.appendChild(node("text", { x: padL, y: 10, "font-size": 9, fill: "#8B96A2" }, opts.name || ""));
+    svg.appendChild(node("text", { x: padL, y: lowY - 8, "font-size": 9, fill: "#8B96A2" },
+      lag ? "PEM you logged, " + lag + (lag === 1 ? " day" : " days") + " later" : "PEM you logged, same day"));
+    [0, 1, 2, 3].forEach(function (v) {
+      svg.appendChild(node("line", { x1: padL, x2: padL + plotW, y1: yL(v), y2: yL(v),
+        stroke: "#252D36", "stroke-width": v === 0 ? 1 : 0.5 }));
+    });
+    [0, 3].forEach(function (v) {
+      svg.appendChild(node("text", { x: padL - 5, y: yL(v) + 3, "text-anchor": "end",
+        "font-size": 9, fill: "#77828E" }, String(v)));
+    });
   }
+
+  /* Dates: the day of the month under every point, the month under the first
+     and wherever it turns. */
   points.forEach(function (p, i) {
-    if (p.value === null) { flush(); return; }
-    run.push([x(i), y(p.value)]);
+    var parts = p.date.split("-").map(Number);
+    svg.appendChild(node("text", { x: x(i), y: axisY, "text-anchor": "middle", "font-size": 8.5,
+      fill: i === n - 1 ? "#C6CED6" : "#77828E" }, String(parts[2])));
+    var prev = i ? points[i - 1].date.slice(5, 7) : null;
+    if (i === 0 || p.date.slice(5, 7) !== prev) {
+      svg.appendChild(node("text", { x: x(i), y: axisY + 10, "text-anchor": "middle", "font-size": 8,
+        fill: "#5C6873" }, MONTH_NAMES[parts[1] - 1]));
+    }
   });
-  flush();
-  points.forEach(function (p, i) {
-    if (p.value === null) return;
-    svg.appendChild(node("circle", { cx: x(i), cy: y(p.value), r: 3, fill: colour,
-      stroke: "#171C22", "stroke-width": 1.2 }));
+
+  function line(vals, y, col) {
+    var run = [];
+    var flush = function () {
+      if (run.length > 1) {
+        svg.appendChild(node("path", { d: "M" + run.map(function (q) { return q[0] + " " + q[1]; }).join("L"),
+          fill: "none", stroke: col, "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+      }
+      run = [];
+    };
+    vals.forEach(function (v, i) {
+      if (v === null || v === undefined) { flush(); return; }
+      run.push([x(i), y(v)]);
+    });
+    flush();
+    vals.forEach(function (v, i) {
+      if (v === null || v === undefined) return;
+      svg.appendChild(node("circle", { cx: x(i), cy: y(v), r: 3, fill: col, stroke: "#171C22", "stroke-width": 1.2 }));
+    });
+  }
+  line(points.map(function (p) { return p.value; }), yT, colour);
+  if (lower) line(points.map(function (p) { return p.later; }), yL, later);
+
+  /* crosshair and the rings that mark the chosen day */
+  var hair = node("line", { y1: topY - 4, y2: (lower ? lowY + lowH : topY + topH) + 3,
+    stroke: "#C6CED6", "stroke-width": 0.8, visibility: "hidden" });
+  var ringT = node("circle", { r: 5, fill: "none", stroke: "#C6CED6", "stroke-width": 1.3, visibility: "hidden" });
+  var ringL = node("circle", { r: 5, fill: "none", stroke: "#C6CED6", "stroke-width": 1.3, visibility: "hidden" });
+  svg.appendChild(hair); svg.appendChild(ringT); svg.appendChild(ringL);
+
+  var wrap = el("div", { class: "dc" });
+  var tip = el("div", { class: "dc-tip", style: { display: "none" } });
+  wrap.appendChild(svg);
+  wrap.appendChild(tip);
+
+  var shown = null, pinned = false;
+  function row(col, value, label) {
+    var key = el("span", { class: "dc-key" });
+    key.style.background = col;
+    return el("div", { class: "dc-row" }, [key,
+      el("span", { class: "dc-val", text: value }), el("span", { class: "dc-lab", text: label })]);
+  }
+  function show(i) {
+    shown = i;
+    var p = points[i];
+    hair.setAttribute("x1", x(i)); hair.setAttribute("x2", x(i));
+    hair.setAttribute("visibility", "visible");
+    if (p.value !== null) {
+      ringT.setAttribute("cx", x(i)); ringT.setAttribute("cy", yT(p.value)); ringT.setAttribute("visibility", "visible");
+    } else ringT.setAttribute("visibility", "hidden");
+    if (lower && p.later !== null && p.later !== undefined) {
+      ringL.setAttribute("cx", x(i)); ringL.setAttribute("cy", yL(p.later)); ringL.setAttribute("visibility", "visible");
+    } else ringL.setAttribute("visibility", "hidden");
+
+    tip.innerHTML = "";
+    tip.appendChild(el("div", { class: "dc-date", text: pretty(p.date) }));
+    tip.appendChild(row(colour, p.value === null ? "–" : String(p.value),
+      (opts.name || "Score") + (p.value !== null ? "" : p.date > scoreEnd() ? ", not in yet" : ", not enough days")));
+    if (lower) {
+      var words = SCALE_SEVERITY[p.later];
+      tip.appendChild(row(later, p.later === null || p.later === undefined ? "–" : p.later + " " + words,
+        "PEM on " + pretty(p.laterDate) +
+        (p.later !== null && p.later !== undefined ? "" : p.laterDate > scoreEnd() ? ", not in yet" : ", not logged")));
+    }
+    tip.style.display = "";
+    /* Beside the crosshair, on whichever side has room, so it never covers
+       the day it describes. */
+    var w = wrap.clientWidth, px = (x(i) / W) * w;
+    tip.style.left = ""; tip.style.right = "";
+    if (px > w / 2) tip.style.right = Math.max(0, w - px + 10) + "px";
+    else tip.style.left = Math.min(w - 40, px + 10) + "px";
+  }
+  function hide() {
+    shown = null; pinned = false;
+    tip.style.display = "none";
+    hair.setAttribute("visibility", "hidden");
+    ringT.setAttribute("visibility", "hidden");
+    ringL.setAttribute("visibility", "hidden");
+  }
+  function nearest(ev) {
+    var r = svg.getBoundingClientRect();
+    var vx = (ev.clientX - r.left) / r.width * W;
+    return Math.max(0, Math.min(n - 1, Math.round((vx - padL) / (plotW / (n - 1)))));
+  }
+  function lastWithData() {
+    for (var i = n - 1; i >= 0; i--) if (points[i].value !== null) return i;
+    return n - 1;
+  }
+  /* A focus ring after a tap is glare for nothing; after a key it is how you
+     know where you are. */
+  svg.addEventListener("pointerdown", function () { svg.classList.add("by-pointer"); });
+  svg.addEventListener("pointermove", function (ev) {
+    if (ev.pointerType === "mouse" && !pinned) show(nearest(ev));
   });
-  return svg;
+  svg.addEventListener("pointerleave", function (ev) {
+    if (ev.pointerType === "mouse" && !pinned) hide();
+  });
+  svg.addEventListener("click", function (ev) {
+    var i = nearest(ev);
+    if (pinned && shown === i) { hide(); return; }
+    pinned = true; show(i);
+  });
+  svg.addEventListener("keydown", function (ev) {
+    svg.classList.remove("by-pointer");
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+      ev.preventDefault();
+      var i = shown === null ? lastWithData() : shown + (ev.key === "ArrowLeft" ? -1 : 1);
+      pinned = true; show(Math.max(0, Math.min(n - 1, i)));
+    } else if (ev.key === "Escape") hide();
+  });
+  return wrap;
 }
 
 /* Seven cells of what you actually entered for one item. */
@@ -1424,7 +1591,8 @@ function detailScreen() {
   wrap.appendChild(el("h2", { class: "section-head panel-head", text: "Last 14 days" }));
   var hist = scoreHistory(kind);
   var bounds = chartBounds(hist);
-  wrap.appendChild(detailChart(hist, kind === "pem" ? SERIES_DETAIL.pem : SERIES_DETAIL.week));
+  wrap.appendChild(detailChart(hist, kind === "pem" ? SERIES_DETAIL.pem : SERIES_DETAIL.week,
+    { name: kind === "pem" ? "PEM risk" : "Week score", lower: kind === "pem" }));
   wrap.appendChild(el("div", { class: "strip-cap",
     text: bounds.lo === 0 && bounds.hi === 100
       ? "0-100, same scale as the number above"
@@ -2422,6 +2590,7 @@ var SETTINGS_PAGES = [
   { key: "baselines", title: "Baselines", blurb: "Your normal value for each item" },
   { key: "track", title: "What to track", blurb: "Hide items, or add your own" },
   { key: "sleep", title: "Sleep", blurb: "Hours you normally need" },
+  { key: "pem", title: "PEM predictor", blurb: "How long PEM takes to show up" },
   { key: "rewards", title: "Rewards", blurb: "What a win and pacing pay" },
   { key: "home", title: "Home screen", blurb: "Which blocks show, and the chart style" }
 ];
@@ -2441,6 +2610,7 @@ function settingsValue(key) {
     return off ? off + " hidden" : "all shown";
   }
   if (key === "sleep") return (state.baselines.hoursTarget || 8) + "h";
+  if (key === "pem") return "+" + pemLag() + (pemLag() === 1 ? " day" : " days");
   if (key === "rewards") return state.pay.on ? euro(state.pay.win) + " a win" : "off";
   if (key === "track") {
     var hidden = Object.keys(state.hidden || {}).filter(function (k) { return state.hidden[k]; }).length;
@@ -2466,6 +2636,7 @@ function baselineScreen() {
   if (page === "baselines") settingsBaselines(wrap);
   else if (page === "track") settingsTrack(wrap);
   else if (page === "sleep") settingsSleep(wrap);
+  else if (page === "pem") settingsPem(wrap);
   else if (page === "rewards") settingsRewards(wrap);
   else if (page === "home") settingsHome(wrap);
 
@@ -2521,6 +2692,17 @@ function settingsSleep(wrap) {
   wrap.appendChild(el("div", { class: "note-line",
     text: "Only sleeping short of this counts against the PEM predictor." }));
 
+}
+
+function settingsPem(wrap) {
+  wrap.appendChild(el("div", { class: "field-label", text: "Days until PEM shows up" }));
+  wrap.appendChild(numberStepper(
+    function () { return pemLag(); },
+    function (n) { state.baselines.pemLag = n === "" ? DEFAULT_BASELINES.pemLag : n; },
+    { step: 1, min: 0, max: 5, decimals: 0, anchor: 1, required: true }
+  ));
+  wrap.appendChild(el("div", { class: "note-line",
+    text: "The predictor panel draws the PEM you logged this many days after each day's risk, so you can see whether a warning came true." }));
 }
 
 function settingsTrack(wrap) {

@@ -224,6 +224,34 @@ A consequence worth knowing: the bottom of a row is that row's lowest point in
 the window, not zero. For comparing rows against each other on one shared
 axis, Settings → Home screen → Lines draws them on a single 0-100 chart.
 
+### Reading a day on the chart
+
+Day-of-month numbers run along the bottom of both panel charts, with the month
+under the first day and wherever it turns. Any day can be read exactly: hover
+on a computer, tap on the phone (tap the same day again to close), or give the
+chart focus and use the arrow keys. A crosshair snaps to the nearest day, so
+you aim at a date rather than at a dot, and the readout lists every line at
+that day, value first. It sits beside the crosshair on whichever side has
+room.
+
+### Did the warning come true?
+
+The PEM predictor's chart has a second band underneath: the PEM you logged,
+drawn under the day whose risk it would answer. With the default delay of one
+day, Tuesday's risk sits over Wednesday's PEM, so a warning that came true shows
+as the two lines rising together, and the readout names both days. The delay
+is in Settings → PEM predictor, from 0 to 5 days; PEM usually lands 12 to 48
+hours after the exertion behind it.
+
+It is a band of its own rather than a second line on the same axis, because
+the predictor runs 0-100 and PEM runs 0-3, and two scales on one axis invent a
+relationship that is not there. The two bands share the dates and the
+crosshair. The last days of the band stay empty until their PEM is logged. If
+the PEM item is hidden, the band goes.
+
+The delay only moves the drawing. It does not change how the predictor is
+worked out.
+
 ### Why the week score sits high
 
 Not a bug, and worth knowing before reading the number as a percentage. Three

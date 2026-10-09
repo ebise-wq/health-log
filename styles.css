@@ -824,3 +824,25 @@ input:focus, textarea:focus, button:focus-visible {
 .ep-acts { margin-top: 24px; }
 .ep-gap-head { margin-top: 20px; }
 .ep-date-empty { fill: #5C6873; }
+
+/* Score panel chart: the readout sits beside the crosshair, over the chart
+   card, and lists every line at that day — value first, then what it is. */
+.dc { position: relative; }
+.dc .chart:focus { outline: none; }
+.dc .chart:focus-visible:not(.by-pointer) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dc-tip {
+  position: absolute;
+  top: 6px;
+  max-width: 230px;
+  background: var(--surface-up);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  pointer-events: none;
+  z-index: 4;
+}
+.dc-date { font-size: 12px; color: var(--dim); margin-bottom: 2px; }
+.dc-row { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 1.5; }
+.dc-key { width: 12px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+.dc-val { color: var(--text); font-weight: 700; white-space: nowrap; }
+.dc-lab { color: var(--dim); }
