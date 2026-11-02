@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.29.0";
+var VERSION = "v1.30.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -527,6 +527,7 @@ function emptyEntry(date) {
     date: date, v: baselineValues(), touched: {},
     lastBite: "", stomach: "", sleepHours: "", wins: [], tags: [],
     note: "", detail: {}, nightNote: "",
+    food: { what: "" }, epDetail: {},
     complete: false, morningDone: false, savedAt: null, updatedAt: null
   };
 }
@@ -2465,7 +2466,8 @@ function eveningScreen() {
   });
   /* Neither a symptom nor something the day asked of you, so it gets its own
      band rather than sitting under Exertion by accident. */
-  wrap.appendChild(el("h2", { class: "band", text: "Bedtime and notes" }));
+  wrap.appendChild(el("h2", { class: "band", text: "Food, bedtime and notes" }));
+  wrap.appendChild(foodSection(date));
   wrap.appendChild(section(null, [
     el("div", { class: "field-label", text: "Time of last bite" }),
     bite
@@ -2521,7 +2523,93 @@ function eveningScreen() {
   return wrap;
 }
 
+/* What you ate, and two checks on it. The checks only appear once something
+   is written, because a leftover or spicy flag on no meal says nothing.
+   Unanswered is kept apart from "no": both start blank. */
+var YES_NO = { max: 1, labels: ["no", "yes"] };
+
+function foodSection(date) {
+  var food = getEntry(date).food || {};
+  var what = el("input", { type: "text", class: "food-field",
+    placeholder: "What you ate" });
+  what.value = food.what || "";
+  var checks = el("div");
+  function paintChecks() {
+    var has = ((getEntry(date).food || {}).what || "").trim() !== "";
+    if (!has) { checks.innerHTML = ""; return; }
+    if (checks.firstChild) return;
+    [["leftover", "Was it a leftover?"], ["spicy", "Was it spicy?"]].forEach(function (q) {
+      checks.appendChild(ratingRow(Object.assign({ key: "food-" + q[0], label: q[1] }, YES_NO),
+        function () { return (getEntry(date).food || {})[q[0]]; },
+        function (n) {
+          update(date, function (e) { if (!e.food) e.food = {}; e.food[q[0]] = n; });
+          saveNow();
+        }).el);
+    });
+  }
+  what.addEventListener("input", function () {
+    update(date, function (e) { if (!e.food) e.food = {}; e.food.what = what.value; });
+    saveSoon();
+    paintChecks();
+  });
+  paintChecks();
+  var peanuts = ratingRow(Object.assign({ key: "peanuts", label: "Peanuts today" }, YES_NO),
+    function () { return getEntry(date).peanuts; },
+    function (n) { update(date, function (e) { e.peanuts = n; }); saveNow(); });
+  return section("Food", [
+    el("div", { class: "field-label", text: "What you ate" }), what, checks, peanuts.el
+  ]);
+}
+
 /* ---------- morning ---------- */
+
+/* An episode this strong or worse gets the follow-up questions. */
+var EP_ASK_FROM = 2;
+
+/* The counts and readings asked about an episode. Each is blank until you
+   enter it; blank means not recorded, not zero. */
+var EP_FIELDS = [
+  { key: "poops", label: "Times you pooped", step: 1, max: 30, anchor: 1, unit: "" },
+  { key: "midodrine", label: "Midodrine taken", step: 1, max: 20, anchor: 1, unit: "",
+    hint: "Number of doses." },
+  { key: "rhrSupine", label: "Peak heart rate, lying down", step: 1, min: 30, max: 250,
+    anchor: 100, unit: "bpm" },
+  { key: "rhrSeated", label: "Peak heart rate, seated", step: 1, min: 30, max: 250,
+    anchor: 110, unit: "bpm" },
+  { key: "toSleep", label: "From start to falling asleep", step: 15, max: 1440,
+    anchor: 60, unit: "min", hint: "Minutes from when the episode began until you fell asleep." }
+];
+
+function episodeQuestions(date) {
+  var kids = [];
+  var syn = ITEM_BY_KEY.syncope;
+  if (syn && !isHidden("syncope")) {
+    kids.push(ratingRow(syn,
+      function () { return getEntry(date).v.syncope; },
+      function (n) {
+        update(date, function (e) { e.v.syncope = n; e.touched.syncope = true; });
+        saveNow();
+      },
+      function () { return state.baselines.syncope; }).el);
+  }
+  EP_FIELDS.forEach(function (f) {
+    var box = el("div", { class: "sub-field" });
+    kids.push(box);
+    box.appendChild(el("div", { class: "field-label",
+      text: f.label + (f.unit ? " (" + f.unit + ")" : "") }));
+    box.appendChild(numberStepper(
+      function () { return (getEntry(date).epDetail || {})[f.key]; },
+      function (n) {
+        update(date, function (e) {
+          if (!e.epDetail) e.epDetail = {};
+          e.epDetail[f.key] = n;
+        });
+      },
+      { step: f.step, min: f.min || 0, max: f.max, anchor: f.anchor, decimals: 0 }));
+    if (f.hint) box.appendChild(el("div", { class: "note-line", text: f.hint }));
+  });
+  return section("About the episode", kids);
+}
 
 function morningScreen() {
   var date = state.mornDate;
@@ -2541,16 +2629,31 @@ function morningScreen() {
   wrap.appendChild(el("div", { class: "hint",
     text: "A night belongs to the evening date, so this is logged under " + pretty(date) + "." }));
 
+  /* The episode follow-ups only matter on a night that had a real episode,
+     so they wait behind it. Below EP_ASK_FROM they are hidden, not cleared:
+     tapping the episode down by mistake loses nothing. */
+  var epSlot = el("div");
+  function paintEpisode() {
+    epSlot.innerHTML = "";
+    var shown = !isHidden("episode") && (getEntry(date).v.episode || 0) >= EP_ASK_FROM;
+    if (shown) epSlot.appendChild(episodeQuestions(date));
+  }
   MORNING_ITEMS.forEach(function (it) {
+    /* Near-syncope is asked inside the episode block when the episode is
+       tracked; if the episode row is hidden it stays a plain row. */
+    if (it.key === "syncope" && !isHidden("episode")) return;
     var row = ratingRow(it,
       function () { return getEntry(date).v[it.key]; },
       function (n) {
         update(date, function (e) { e.v[it.key] = n; e.touched[it.key] = true; });
         saveNow();
       },
-      function () { return state.baselines[it.key]; });
+      function () { return state.baselines[it.key]; },
+      it.key === "episode" ? paintEpisode : null);
     wrap.appendChild(row.el);
+    if (it.key === "episode") wrap.appendChild(epSlot);
   });
+  paintEpisode();
 
   wrap.appendChild(section("Hours slept", [
     hoursStepper(
@@ -2954,6 +3057,16 @@ function backupCsv() {
     if (e.exertionNote) rows.push([d, "Exertion note", "Note", e.exertionNote, ""]);
     if (e.note) rows.push([d, "Note", "Note", e.note, ""]);
     if (e.nightNote) rows.push([d, "Night note", "Note", e.nightNote, ""]);
+    var food = e.food || {};
+    if (food.what) rows.push([d, "What you ate", "Food", food.what, ""]);
+    if (food.leftover !== undefined) rows.push([d, "Meal was a leftover", "Food", food.leftover, ""]);
+    if (food.spicy !== undefined) rows.push([d, "Meal was spicy", "Food", food.spicy, ""]);
+    if (e.peanuts !== undefined) rows.push([d, "Peanuts", "Food", e.peanuts, ""]);
+    var ep = e.epDetail || {};
+    EP_FIELDS.forEach(function (f) {
+      if (ep[f.key] === "" || ep[f.key] === undefined || ep[f.key] === null) return;
+      rows.push([d, "Episode: " + f.label + (f.unit ? " (" + f.unit + ")" : ""), "Episode", ep[f.key], ""]);
+    });
   });
   return rows.map(function (r) { return r.map(csvCell).join(","); }).join("\n");
 }

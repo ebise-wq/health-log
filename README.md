@@ -551,6 +551,33 @@ their `stomach` value and still export it as `Stomach at bedtime`. New records
 use `Post-dinner indigestion`. Its baseline starts at 0; set your own on the
 Baseline screen.
 
+## Episode questions on the Morning screen
+
+When the Dysautonomic episode is 2 (mild) or higher, an "About the episode"
+block opens under it. It asks:
+
+- Near-syncope (no / yes)
+- Times you pooped
+- Midodrine taken (doses)
+- Peak heart rate lying down (bpm)
+- Peak heart rate seated (bpm)
+- Minutes from the start of the episode to falling asleep
+
+Below 2 the block is hidden. Values already entered are kept, so tapping the
+episode down by mistake loses nothing. The threshold is `EP_ASK_FROM` in
+`app.js`. The counts start blank, and blank means not recorded, not zero. They
+are stored per night in `epDetail` and export as `Episode: …` rows. If the
+episode item is hidden in Settings, Near-syncope goes back to being a plain
+row.
+
+## Food on the Evening screen
+
+The Evening screen has a Food section: what you ate (free text), then "Was it a
+leftover?" and "Was it spicy?" once something is written, and "Peanuts today".
+The yes/no answers start blank, so an unanswered question is not read as "no".
+They are stored in `food` and `peanuts` on the day, and export as `What you
+ate`, `Meal was a leftover`, `Meal was spicy` and `Peanuts`, category `Food`.
+
 ## Hours slept
 
 Recorded on the Morning screen with half hour steps, so it needs no keyboard in
