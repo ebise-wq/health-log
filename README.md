@@ -42,7 +42,14 @@ too. The hour is `EVENING_FROM_HOUR` at the top of the home section.
 **Evening** and **Morning** are not permanent tabs. You reach them from Home,
 and the tab appears only while you are on one, so there is a way back.
 
-**History** is the full list of days, plus the backup buttons.
+**History** is the full list of days, plus the backup buttons. Each day has a
+**Morning** button beside it that opens the morning log for the morning after
+that day. Before v1.30.1 the morning log was only reachable from Home, and only
+for this morning.
+
+The two logs are called **evening** and **morning** everywhere on screen, never
+"night". The data keeps its old field names (`nightNote`, the `night` band) so
+older backups still load, and the CSV still exports `Night note`.
 
 **Settings** is a short menu — Baselines, What to track, Sleep, Rewards — each
 on its own page. Baselines used to sit at the top of this screen as twenty-odd
@@ -282,11 +289,11 @@ and you can add your own.
   scores. Everything already recorded is kept and still exports — the CSV walks
   every key ever defined, not just the ones on screen today.
 - **Adding your own** takes a name, a scale (0-3 or no/yes), where it belongs
-  (Symptoms, Exertion or Night) and its normal value, set right there in the
+  (Symptoms, Exertion or Morning) and its normal value, set right there in the
   form rather than in a separate trip to Baselines. It then behaves like any other item —
   it gets a baseline, joins the matching score, appears in the chart picker and
   exports under its own name. Removing one keeps its history in the export.
-- **Which group** appears for a symptom only, because Exertion and Night each
+- **Which group** appears for a symptom only, because Exertion and Morning each
   have a single section already. Pick Energy, Brain, Body or Gut and the item
   sits at the end of that section in the evening form, beside the built-in items
   it belongs with. Pick *Your own* — the default — and it lands in a section of
