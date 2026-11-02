@@ -850,3 +850,8 @@ input:focus, textarea:focus, button:focus-visible {
 /* Episode follow-ups and the food field */
 .sub-field { margin-top: 16px; }
 .food-field { margin-bottom: 8px; }
+
+/* History: the day and its night side by side */
+.day-row { display: flex; gap: 8px; }
+.day-row .day { flex: 1 1 auto; min-width: 0; }
+.day-row .day.night { flex: 0 0 116px; width: 116px; }

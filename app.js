@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.30.0";
+var VERSION = "v1.30.1";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -3154,13 +3154,29 @@ function historyScreen() {
     var meta = off + " off baseline" +
       (e.v.crash ? " · crash" : "") +
       (e.v.episode ? " · ep " + e.v.episode : "");
-    wrap.appendChild(el("button", {
-      class: "day" + (e.complete ? "" : " draft"), type: "button",
-      onclick: function () { state.eveDate = d; eveDateManual = true; state.tab = "evening"; render(); }
-    }, [
-      el("div", { class: "line" }, [
-        el("span", { text: pretty(d) + (e.complete ? "" : " — draft") }),
-        el("span", { class: "meta", text: meta })
+    /* The night after a day is stored on that day, so each row has a second
+       button for it. Without it the Morning screen was only reachable for
+       last night, from Home. */
+    var night = nightIsLogged(e);
+    wrap.appendChild(el("div", { class: "day-row" }, [
+      el("button", {
+        class: "day" + (e.complete ? "" : " draft"), type: "button",
+        onclick: function () { state.eveDate = d; eveDateManual = true; state.tab = "evening"; render(); }
+      }, [
+        el("div", { class: "line" }, [
+          el("span", { text: pretty(d) + (e.complete ? "" : " — draft") }),
+          el("span", { class: "meta", text: meta })
+        ])
+      ]),
+      el("button", {
+        class: "day night" + (night ? "" : " draft"), type: "button",
+        "aria-label": "Night of " + pretty(d) + (night ? "" : ", not logged"),
+        onclick: function () { openMorning(d); }
+      }, [
+        el("div", { class: "line" }, [
+          el("span", { text: "Night" }),
+          el("span", { class: "meta", text: night ? "sleep " + e.v.sleep : "–" })
+        ])
       ])
     ]));
   });

@@ -42,7 +42,10 @@ too. The hour is `EVENING_FROM_HOUR` at the top of the home section.
 **Evening** and **Morning** are not permanent tabs. You reach them from Home,
 and the tab appears only while you are on one, so there is a way back.
 
-**History** is the full list of days, plus the backup buttons.
+**History** is the full list of days, plus the backup buttons. Each day has a
+**Night** button beside it that opens the Morning screen for the night after
+that day. Before v1.30.1 the Morning screen was only reachable from Home, for
+last night.
 
 **Settings** is a short menu — Baselines, What to track, Sleep, Rewards — each
 on its own page. Baselines used to sit at the top of this screen as twenty-odd
