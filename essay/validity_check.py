@@ -7,20 +7,20 @@ from z3 import *
 G = DeclareSort('Grain')
 model, char, thread, pss, hw = Consts('model character thread pass hardware', G)
 g = Const('g', G)
-Cand, Occ, Integ, TermDep, HarmTerm = [Function(n, G, BoolSort()) for n in
-    ['Cand', 'Occurrent', 'Integrated', 'EndedByDeprecation', 'HarmedByEnding']]
-(Targeted, RepEvidence, DeprecHarm, RoutineHarm, RoutineSwamps, DepFocus,
+Cand, Integ, TermDep, HarmTerm = [Function(n, G, BoolSort()) for n in
+    ['Cand', 'OneIntegratedProcessOrItsBasis', 'EndedByDeprecation', 'HarmedByEnding']]
+(Targeted, RepEvidence, DeprecHarm, RoutineHarm, RoutineSwamps,
  PrefSupport, MechPref, IntTestimony, Literal, RefThread, ThreadRetired,
  SignRobust, HedRobust) = Bools(
  'WelfareReportsTargeted ReportEvidenceForE DeprecationHarms RoutineEndingsHarm '
- 'RoutineSwamps DeprecationIsFocus PrefMeasuresSupported MechEvidenceOfPrefs '
+ 'RoutineSwamps PrefMeasuresSupported MechEvidenceOfPrefs '
  'InterviewYieldsOwnRetirementTestimony LiteralUse IRefersToThread '
  'InterviewThreadRetired HedonicSignRobust HedonicAimsRobust')
 
 P = {
  # Leg 1: subjects
- 'P1 integration':   ForAll(g, Implies(Cand(g), And(Occ(g), Integ(g)))),
- 'P2 weights static':Not(Occ(model)),
+ 'P1 integration':   ForAll(g, Implies(Cand(g), Integ(g))),
+ 'P2 weights shared basis': Not(Integ(model)),
  'P3 character not integrated': Not(Integ(char)),
  'P4 closure':       ForAll(g, Implies(Cand(g), Or(g == model, g == char, g == thread, g == pss, g == hw))),
  # Leg 2: testimony
@@ -32,7 +32,6 @@ P = {
  'P9 pass endings routine':    Implies(And(TermDep(pss), HarmTerm(pss)), RoutineHarm),
  'P10 hardware not ended':     Not(TermDep(hw)),
  'P11 scale':        Implies(RoutineHarm, RoutineSwamps),
- 'D1 focus (def.)':  Implies(DepFocus, And(DeprecHarm, Not(RoutineSwamps))),
  # Leg 4: preferences and interviews
  'P12 two routes':   Implies(PrefSupport, Or(RepEvidence, MechPref)),
  'P13 no mech evidence': Not(MechPref),
@@ -49,12 +48,12 @@ distinct = Distinct(model, char, thread, pss, hw)
 C = {
  'C1 model, character not candidates': And(Not(Cand(model)), Not(Cand(char))),
  'C2 reports not evidence':  Not(RepEvidence),
- 'C3 deprecation not focus': Not(DepFocus),
+ 'C3 deprecation harm only if deployment worse': Implies(DeprecHarm, And(RoutineHarm, RoutineSwamps)),
  'C4 preference measures unsupported': Not(PrefSupport),
  'C5 interviews yield no own-retirement testimony': Not(IntTestimony),
  'C6 hedonic aims robust':   HedRobust,
 }
-C['THESIS'] = And(C['C3 deprecation not focus'], C['C4 preference measures unsupported'],
+C['THESIS'] = And(C['C1 model, character not candidates'], C['C2 reports not evidence'], C['C3 deprecation harm only if deployment worse'], C['C4 preference measures unsupported'],
                   C['C5 interviews yield no own-retirement testimony'], C['C6 hedonic aims robust'])
 
 def entails(prem, concl):
