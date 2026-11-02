@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.30.1";
+var VERSION = "v1.30.2";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -2210,7 +2210,7 @@ function homeScreen() {
   wrap.appendChild(el("div", { class: "home-head" }, [
     el("span", { text: pretty(t) }),
     el("span", { class: "sub", text: eveDone && nightDone ? " · all logged"
-      : eveDone ? " · night still to log" : nightDone ? " · evening still to log" : "" })
+      : eveDone ? " · morning still to log" : nightDone ? " · evening still to log" : "" })
   ]));
 
   if (state.home.scores) wrap.appendChild(scorePair());
@@ -2243,10 +2243,10 @@ function homeScreen() {
   }
 
   /* Morning — the night that just ended */
-  var nightSub = "Night of " + pretty(y) + " → " + pretty(t);
+  var nightSub = "Morning of " + pretty(t) + ", after the evening of " + pretty(y);
   if (nightDone) {
     var n = state.days[y];
-    done.push(doneLine("Night logged · sleep " + n.v.sleep +
+    done.push(doneLine("Morning logged · sleep " + n.v.sleep +
       (n.v.episode ? " · ep " + n.v.episode : ""), function () { openMorning(y); }));
   } else {
     due.push(dueCard("Morning", nightSub, function () { openMorning(y); }));
@@ -2621,13 +2621,13 @@ function morningScreen() {
     function (d) { state.mornDate = d; mornDateManual = true; render(); },
     function (cap) {
       cap.appendChild(el("span", {
-        text: "Night of " + pretty(date) + " → " + pretty(shiftDay(date, 1))
+        text: "Morning of " + pretty(shiftDay(date, 1))
       }));
     }
   ));
 
   wrap.appendChild(el("div", { class: "hint",
-    text: "A night belongs to the evening date, so this is logged under " + pretty(date) + "." }));
+    text: "A morning log is stored under the evening before it, so this is logged under " + pretty(date) + "." }));
 
   /* The episode follow-ups only matter on a night that had a real episode,
      so they wait behind it. Below EP_ASK_FROM they are hidden, not cleared:
@@ -2669,7 +2669,7 @@ function morningScreen() {
     update(date, function (e) { e.nightNote = nightNote.value; });
     saveSoon();
   });
-  wrap.appendChild(section("Note for this night", [nightNote]));
+  wrap.appendChild(section("Morning note", [nightNote]));
 
   wrap.appendChild(el("button", { class: "btn primary", type: "button", text: "Done",
     onclick: function () {
@@ -2846,7 +2846,7 @@ function settingsTrack(wrap) {
     wrap.appendChild(el("div", { class: "section-head", text: sec.title }));
     sec.items.forEach(function (it) { wrap.appendChild(trackRow(it.key, it.label)); });
   });
-  wrap.appendChild(el("div", { class: "section-head", text: "Night" }));
+  wrap.appendChild(el("div", { class: "section-head", text: "Morning" }));
   BUILTIN_MORNING.forEach(function (it) { wrap.appendChild(trackRow(it.key, it.label)); });
 
   if ((state.custom || []).length) {
@@ -2887,7 +2887,7 @@ function settingsTrack(wrap) {
   wrap.appendChild(el("div", { class: "field-label", text: "Where it belongs" }));
   wrap.appendChild(chipRow(
     [{ label: "Symptoms", value: "symptoms" }, { label: "Exertion", value: "exertion" },
-     { label: "Night", value: "night" }],
+     { label: "Morning", value: "night" }],
     function () { return draft.band; },
     function (v) { draft.band = v; paintCat(); }));
 
@@ -3010,7 +3010,7 @@ function settingsHome(wrap) {
 }
 
 function bandName(band) {
-  return band === "exertion" ? "Exertion" : band === "night" ? "Night" : "Symptoms";
+  return band === "exertion" ? "Exertion" : band === "night" ? "Morning" : "Symptoms";
 }
 
 /* ---------- backup files ---------- */
@@ -3170,11 +3170,11 @@ function historyScreen() {
       ]),
       el("button", {
         class: "day night" + (night ? "" : " draft"), type: "button",
-        "aria-label": "Night of " + pretty(d) + (night ? "" : ", not logged"),
+        "aria-label": "Morning after " + pretty(d) + (night ? "" : ", not logged"),
         onclick: function () { openMorning(d); }
       }, [
         el("div", { class: "line" }, [
-          el("span", { text: "Night" }),
+          el("span", { text: "Morning" }),
           el("span", { class: "meta", text: night ? "sleep " + e.v.sleep : "–" })
         ])
       ])
