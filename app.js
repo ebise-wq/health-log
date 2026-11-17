@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.31.0";
+var VERSION = "v1.32.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -2224,17 +2224,17 @@ function pacingRow() {
   return el("div", { class: "grid-wrap" }, [grid]);
 }
 
-function backupLine() {
+/* When the last JSON backup was, in words, and whether it is overdue. */
+function backupAge() {
   var last = state.lastBackupAt;
-  var text, stale;
-  if (!last) {
-    text = "never";
-    stale = true;
-  } else {
-    var days = Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
-    text = days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
-    stale = days >= 14;
-  }
+  if (!last) return { text: "never", stale: true };
+  var days = Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
+  return { text: days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago",
+    stale: days >= 14 };
+}
+
+function backupLine() {
+  var age = backupAge(), text = age.text, stale = age.stale;
   var btn = el("button", { class: "backup" + (stale ? " stale" : ""), type: "button",
     onclick: function () { state.tab = "history"; render(); } }, [
     el("span", { class: "foot-label", text: "Backup" }),
@@ -3180,12 +3180,90 @@ function restore(parsed) {
 
 var pendingMsg = "";
 
+var histBackupOpen = false;
+
 function historyScreen() {
   var wrap = el("div");
   var dates = Object.keys(state.days).sort().reverse();
   var msg = el("div", { class: "msg", style: { display: "none" } });
   function say(text) { msg.textContent = text; msg.style.display = ""; }
   if (pendingMsg) { say(pendingMsg); pendingMsg = ""; }
+
+  /* Backups. Browser storage gets wiped sooner or later, so this sits at the
+     top: one line with when the last one was and a button to make one. The
+     rarer options (CSV, restore, copy) fold out from it. */
+  var file = el("input", { type: "file", accept: "application/json,.json", id: "restore-file", class: "hidden-file" });
+  file.addEventListener("change", function () {
+    var f = file.files && file.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var parsed = JSON.parse(String(reader.result));
+        if (!parsed || typeof parsed !== "object" || !parsed.days) {
+          say("That file has no days in it."); return;
+        }
+        var r = restore(parsed);
+        pendingMsg = "Restored: " + r.added + " new, " + r.updated + " updated, " +
+          r.kept + " already newer here.";
+        render();
+      } catch (err) {
+        say("That file isn't valid JSON.");
+      }
+    };
+    reader.readAsText(f);
+  });
+
+  var age = backupAge();
+  var ageEl = el("span", { class: "bk-age" + (age.stale ? " stale" : ""), text: "Last backup: " + age.text });
+  var more = el("div", { class: "bk-more", style: { display: histBackupOpen ? "" : "none" } }, [
+    el("div", { class: "pair" }, [
+      el("button", { class: "btn raised", type: "button", text: "Download CSV", onclick: function () {
+        say(download("daily-log-" + today() + ".csv", backupCsv(), "text/csv")
+          ? "CSV file downloaded." : "Download failed — use Copy JSON below.");
+      }}),
+      el("button", { class: "btn raised", type: "button", text: "Copy JSON",
+        onclick: function () {
+          var text = backupJson();
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(
+              function () { say("JSON copied."); },
+              function () { say("Copy failed."); });
+          } else {
+            say("Clipboard not available on this phone.");
+          }
+        }})
+    ]),
+    el("label", { class: "btn raised wide file-btn", for: "restore-file",
+      text: "Restore from a JSON file" }),
+    file,
+    el("div", { class: "note-line",
+      text: "Merged in. A day already here is only replaced by a newer copy." })
+  ]);
+  var moreBtn = el("button", { class: "btn bk-btn bk-toggle", type: "button", text: "\u22EF",
+    "aria-label": "More backup options", "aria-expanded": histBackupOpen ? "true" : "false",
+    onclick: function () {
+      histBackupOpen = !histBackupOpen;
+      more.style.display = histBackupOpen ? "" : "none";
+      moreBtn.setAttribute("aria-expanded", histBackupOpen ? "true" : "false");
+    } });
+  wrap.appendChild(el("div", { class: "bk-line" }, [
+    ageEl,
+    el("button", { class: "btn raised bk-btn", type: "button", text: "Back up", onclick: function () {
+      if (download("daily-log-" + today() + ".json", backupJson(), "application/json")) {
+        state.lastBackupAt = new Date().toISOString();
+        saveNow();
+        ageEl.textContent = "Last backup: today";
+        ageEl.classList.remove("stale");
+        say("JSON file downloaded.");
+      } else {
+        say("Download failed — use Copy JSON under \u22EF.");
+      }
+    }}),
+    moreBtn
+  ]));
+  wrap.appendChild(more);
+  wrap.appendChild(msg);
 
   wrap.appendChild(el("div", { class: "hint",
     text: dates.length + (dates.length === 1 ? " day logged" : " days logged") }));
@@ -3227,66 +3305,6 @@ function historyScreen() {
       ])
     ]));
   });
-
-  /* Backups. Browser storage gets wiped sooner or later, so this is the part
-     that has to work. */
-  var file = el("input", { type: "file", accept: "application/json,.json", id: "restore-file", class: "hidden-file" });
-  file.addEventListener("change", function () {
-    var f = file.files && file.files[0];
-    if (!f) return;
-    var reader = new FileReader();
-    reader.onload = function () {
-      try {
-        var parsed = JSON.parse(String(reader.result));
-        if (!parsed || typeof parsed !== "object" || !parsed.days) {
-          say("That file has no days in it."); return;
-        }
-        var r = restore(parsed);
-        pendingMsg = "Restored: " + r.added + " new, " + r.updated + " updated, " +
-          r.kept + " already newer here.";
-        render();
-      } catch (err) {
-        say("That file isn't valid JSON.");
-      }
-    };
-    reader.readAsText(f);
-  });
-
-  wrap.appendChild(section("Backup", [
-    el("div", { class: "pair" }, [
-      el("button", { class: "btn raised", type: "button", text: "Download JSON", onclick: function () {
-        if (download("daily-log-" + today() + ".json", backupJson(), "application/json")) {
-          state.lastBackupAt = new Date().toISOString();
-          saveNow();
-          say("JSON file downloaded.");
-        } else {
-          say("Download failed — use Copy JSON below.");
-        }
-      }}),
-      el("button", { class: "btn raised", type: "button", text: "Download CSV", onclick: function () {
-        say(download("daily-log-" + today() + ".csv", backupCsv(), "text/csv")
-          ? "CSV file downloaded." : "Download failed — use Copy JSON below.");
-      }})
-    ]),
-    el("label", { class: "btn raised wide file-btn", for: "restore-file",
-      text: "Restore from a JSON file" }),
-    file,
-    el("div", { class: "note-line",
-      text: "Merged in. A day already here is only replaced by a newer copy." }),
-    el("div", { class: "spacer" }),
-    el("button", { class: "btn raised wide", type: "button", text: "Copy JSON to clipboard",
-      onclick: function () {
-        var text = backupJson();
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(
-            function () { say("JSON copied."); },
-            function () { say("Copy failed."); });
-        } else {
-          say("Clipboard not available on this phone.");
-        }
-      }}),
-    msg
-  ]));
 
   return wrap;
 }

@@ -391,6 +391,15 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .backup.stale .foot-label { color: var(--warn); }
 
+/* History: backup on one line at the top, the rarer options folded under it. */
+.bk-line { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.bk-age { flex: 1; min-width: 0; font-size: 14px; color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bk-age.stale { color: var(--warn); }
+.bk-btn { flex: 0 0 auto; min-height: 44px; padding: 0 16px; }
+.bk-toggle { padding: 0 12px; font-size: 18px; }
+.bk-more { margin-bottom: 16px; }
+
 /* Hours slept stepper */
 .stepper { display: flex; gap: 8px; align-items: stretch; }
 .stepper .btn { width: 72px; font-size: 22px; }
