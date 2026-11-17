@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.30.2";
+var VERSION = "v1.31.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -89,6 +89,26 @@ var INK = {
   "#2B333C": "#C6CED6", "#645429": "#C6CED6", "#454F5C": "#C6CED6",
   "#35604A": "#C6CED6"
 };
+
+/* The fill for a value on a ramp. A half value sits between two steps, so
+   it takes the colour halfway between them. */
+function rampAt(ramp, v) {
+  var lo = Math.max(0, Math.min(ramp.length - 1, Math.floor(v)));
+  var hi = Math.min(ramp.length - 1, lo + 1);
+  var t = v - Math.floor(v);
+  if (!t || lo === hi) return ramp[lo];
+  var a = ramp[lo], b = ramp[hi], out = "#";
+  for (var i = 1; i < 7; i += 2) {
+    var c = Math.round(parseInt(a.substr(i, 2), 16) * (1 - t) + parseInt(b.substr(i, 2), 16) * t);
+    out += (c < 16 ? "0" : "") + c.toString(16).toUpperCase();
+  }
+  return out;
+}
+/* The text colour for a fill; a blended fill is not in INK, so it goes by
+   the value: dark ink from 1.5 up, where the warm ramps get light enough. */
+function inkFor(fill, v) {
+  return INK[fill] || (v >= 1.5 ? "#14181C" : "#C6CED6");
+}
 
 /* A 0-100 load, banded the same way the PEM predictor bands itself. */
 function heatFill(score) {
@@ -187,7 +207,7 @@ var BUILTIN_SECTIONS = [
 var BUILTIN_MORNING = [
   { key: "sleep", label: "Sleep quality", ramp: SLEEP_RAMP, higherIsBetter: true,
     scale: SCALE_SLEEP },
-  { key: "episode", label: "Dysautonomic episode", max: 5, ramp: RAMP6,
+  { key: "episode", label: "Dysautonomic episode", max: 5, ramp: RAMP6, half: true,
     scale: SCALE_EPISODE },
   { key: "syncope", label: "Near-syncope", max: 1, labels: ["no", "yes"] }
 ];
@@ -595,11 +615,37 @@ function ratingRow(item, getValue, setValue, baselineOf, onAfter) {
       opts.appendChild(b);
     })(n);
   }
+  /* A half step, for an item that allows one: a value between two numbers is
+     the lower number plus this. Tapping it again takes the half off. */
+  var halfBtn = null;
+  if (item.half) {
+    halfBtn = el("button", { type: "button", class: "half", "aria-pressed": "false", text: "+\u00BD",
+      "aria-label": "Add a half",
+      onclick: function () {
+        var v = getValue();
+        if (v === undefined || v === null || v === "") v = 0.5;
+        else if (v % 1) v = Math.floor(v);
+        else if (v < max) v = v + 0.5;
+        else return;
+        setValue(v); refresh(); if (onAfter) onAfter();
+      } });
+    opts.appendChild(halfBtn);
+  }
   function refresh() {
     var value = getValue();
     var base = baselineOf ? baselineOf() : undefined;
+    var whole = typeof value === "number" ? Math.floor(value) : value;
+    if (halfBtn) {
+      var hasHalf = typeof value === "number" && value % 1 !== 0;
+      var hFill = hasHalf ? rampAt(ramp, value) : "";
+      halfBtn.setAttribute("aria-pressed", hasHalf ? "true" : "false");
+      halfBtn.setAttribute("data-dark", hasHalf && inkFor(hFill, value) === "#14181C" ? "1" : "0");
+      halfBtn.style.background = hFill;
+      halfBtn.style.borderColor = hFill;
+      halfBtn.disabled = value === max;
+    }
     buttons.forEach(function (b, n) {
-      var on = value === n;
+      var on = whole === n;
       var isBase = base === n;
       b.setAttribute("aria-pressed", on ? "true" : "false");
       b.setAttribute("data-baseline", isBase ? "1" : "0");
@@ -635,6 +681,7 @@ function ratingRow(item, getValue, setValue, baselineOf, onAfter) {
     for (var k = 0; k <= max; k++) {
       anchors.appendChild(el("span", { text: item.scale[k] === undefined ? "" : item.scale[k] }));
     }
+    if (halfBtn) anchors.appendChild(el("span", { class: "half" }));
     kids.push(anchors);
   }
   return { el: el("div", { class: "row" }, kids), refresh: refresh };
@@ -3314,9 +3361,12 @@ function epLabelDate(label, year, prev) {
 function epScore(cell) {
   var c = epPlain(cell);
   if (c === "") return { marker: true };
-  var m = c.match(/^(\d)/);
-  return { v: m ? Math.min(5, Number(m[1])) : null,
-    flag: /(^|[^a-z])s([^a-z]|$)/i.test(c.replace(/^\d/, "")) ? "S" : "" };
+  var m = c.match(/^(\d)(?:[.,](\d))?/);
+  var v = m ? Number(m[1]) + (m[2] ? Number(m[2]) / 10 : 0) : null;
+  if (v === null && /^½/.test(c)) v = 0.5;
+  if (v !== null && /^\d\s*½/.test(c)) v += 0.5;
+  return { v: v === null ? null : Math.min(5, Math.round(v * 2) / 2),
+    flag: /(^|[^a-z])s([^a-z]|$)/i.test(c.replace(/^\d([.,]\d)?\s*½?/, "")) ? "S" : "" };
 }
 
 /* A change's label is its first clause: the rest goes in its detail. */
@@ -3462,7 +3512,7 @@ function epClean(raw) {
   var out = { nights: [], changes: [], doses: [], scale: {} };
   (raw.nights || []).forEach(function (r) {
     if (!r || !okDate(r.date)) return;
-    var v = typeof r.v === "number" && r.v >= 0 && r.v <= 5 ? Math.round(r.v) : null;
+    var v = typeof r.v === "number" && r.v >= 0 && r.v <= 5 ? Math.round(r.v * 2) / 2 : null;
     out.nights.push({ date: r.date, part: r.part === "eve" || r.part === "day" ? r.part : "night",
       label: str(r.label, 40), v: v, flag: r.flag === "S" ? "S" : "",
       what: str(r.what), ctx: str(r.ctx) });
@@ -3677,12 +3727,18 @@ function epChart(rows, changes, doses) {
   if (epShow.changes) changes.forEach(function (c) { marked[c.date] = true; });
   doses.forEach(function (gp) { if (epShow.doses[gp.name]) gp.dates.forEach(function (d) { marked[d] = true; }); });
 
-  var svg = node("svg", { viewBox: "0 0 " + W + " " + H, class: "ep-chart", role: "img",
+  /* The scale sits in its own strip that stays at the top of the screen while
+     the nights scroll under it. The body keeps the same coordinates and just
+     starts its view below the strip. */
+  var head = node("svg", { viewBox: "0 0 " + W + " " + HEAD, class: "ep-chart ep-head-svg" });
+  var svg = node("svg", { viewBox: "0 " + HEAD + " " + W + " " + (H - HEAD), class: "ep-chart", role: "img",
     "aria-label": "Episode severity, night by night" });
 
   /* grid */
   for (var k = 0; k <= 5; k++) {
-    svg.appendChild(node("line", { x1: x0 + k * U, x2: x0 + k * U, y1: HEAD - 4, y2: H - 4,
+    head.appendChild(node("line", { x1: x0 + k * U, x2: x0 + k * U, y1: HEAD - 4, y2: HEAD,
+      stroke: k === 0 ? "#3A4550" : "#222A32", "stroke-width": k === 0 ? 1 : 0.6 }));
+    svg.appendChild(node("line", { x1: x0 + k * U, x2: x0 + k * U, y1: HEAD, y2: H - 4,
       stroke: k === 0 ? "#3A4550" : "#222A32", "stroke-width": k === 0 ? 1 : 0.6 }));
   }
   /* the scale along the top, each number a way into its definition */
@@ -3698,7 +3754,7 @@ function epChart(rows, changes, doses) {
     } else {
       gEl.appendChild(node("text", { x: x, y: 16, "text-anchor": "middle", class: "ep-ax" }, key));
     }
-    svg.appendChild(gEl);
+    head.appendChild(gEl);
   });
 
   items.forEach(function (it) {
@@ -3732,12 +3788,12 @@ function epChart(rows, changes, doses) {
       if (r.v === null) {
         gRow.appendChild(node("text", { x: x0 + 4, y: cy + 3.3, class: "ep-date" }, "–"));
       } else {
-        var fill = RAMP6[r.v];
+        var fill = rampAt(RAMP6, r.v);
         gRow.appendChild(node("rect", { x: x0, y: cy - 4.5, width: r.v ? r.v * U : 3, height: 9, rx: 1.5, fill: fill }));
         /* Numbers only on the nights that matter most, not on every bar. */
         if (r.v >= 3) {
           gRow.appendChild(node("text", { x: x0 + r.v * U - 4, y: cy + 3.3, "text-anchor": "end",
-            class: "ep-val", fill: INK[fill] || "#14181C" }, String(r.v)));
+            class: "ep-val", fill: inkFor(fill, r.v) }, String(r.v)));
         }
       }
       if (r.flag === "S") {
@@ -3816,7 +3872,7 @@ function epChart(rows, changes, doses) {
       svg.appendChild(gC);
     });
   }
-  return { svg: svg, H: H };
+  return { svg: svg, head: head, H: H };
 }
 
 /* ---- the screen ---- */
@@ -3856,6 +3912,7 @@ function epChartSection(wrap, rows, changes, doses) {
 
     var chart = epChart(rows, changes, doses);
     var box = el("div", { class: "ep-wrap" });
+    box.appendChild(el("div", { class: "ep-head" }, [chart.head]));
     box.appendChild(chart.svg);
     var panel = el("div", { class: "ep-panel", style: { display: "none" } });
     box.appendChild(panel);
@@ -3866,7 +3923,7 @@ function epChartSection(wrap, rows, changes, doses) {
 
     function chipFor(v, flag) {
       var c = el("span", { class: "ep-chip", text: v === null || v === undefined ? "–" : String(v) });
-      if (v !== null && v !== undefined) { c.style.background = RAMP6[v]; c.style.color = INK[RAMP6[v]] || "#14181C"; }
+      if (v !== null && v !== undefined) { var f = rampAt(RAMP6, v); c.style.background = f; c.style.color = inkFor(f, v); }
       return c;
     }
     function place(target) {
@@ -3939,7 +3996,7 @@ function epChartSection(wrap, rows, changes, doses) {
         text: c.src === "app" ? "Added here" : "From the imported log" }));
       place(g);
     }
-    chart.svg.addEventListener("click", function (ev) {
+    box.addEventListener("click", function (ev) {
       var g = ev.target.closest ? ev.target.closest(".ep-row, .ep-key, .ep-change") : null;
       if (!g) return;
       if (g.classList.contains("ep-key")) { showKey(g.getAttribute("data-key"), g); return; }
@@ -3947,8 +4004,9 @@ function epChartSection(wrap, rows, changes, doses) {
       var i = Number(g.getAttribute("data-i"));
       if (current === i) close(); else showRow(i);
     });
-    chart.svg.addEventListener("keydown", function (ev) {
+    box.addEventListener("keydown", function (ev) {
       if (ev.key !== "Enter" && ev.key !== " ") return;
+      if (!ev.target.closest || !ev.target.closest(".ep-row, .ep-key, .ep-change")) return;
       ev.preventDefault();
       ev.target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
