@@ -128,10 +128,24 @@ button, input, textarea, select {
 }
 /* The baseline is dashed whether or not it is the value you picked. */
 .opts button[data-baseline="1"] { border-style: dashed; }
-/* The half step is narrower than a number and set slightly apart. */
-.opts button.half { flex: 0.85; margin-left: 4px; font-size: 14px; }
-.opts button.half:disabled { opacity: 0.35; }
-.scale span.half { flex: 0.85; margin-left: 4px; }
+/* Half-step slider. The track is inset so the end dots and their words have
+   room; the whole box takes the touch, not just the dots. */
+.sl { padding: 18px 24px 50px; touch-action: pan-y; cursor: pointer; outline: none;
+  user-select: none; -webkit-user-select: none; }
+.sl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.sl-track { position: relative; height: 4px; background: var(--line); border-radius: 2px; }
+.sl-fill { position: absolute; left: 0; top: 0; height: 4px; border-radius: 2px; }
+.sl-dot { position: absolute; top: 50%; border-radius: 50%; background: #3A4550;
+  transform: translate(-50%, -50%); }
+.sl-big { width: 14px; height: 14px; }
+.sl-small { width: 7px; height: 7px; }
+.sl-dot.base { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--dim); }
+.sl-num { position: absolute; top: 17px; transform: translateX(-50%); font-size: 14px; color: var(--dim); }
+.sl-word { position: absolute; top: 35px; transform: translateX(-50%); font-size: 11px;
+  color: var(--dim); white-space: nowrap; }
+.sl-thumb { position: absolute; top: 50%; width: 28px; height: 28px; border-radius: 50%;
+  transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; box-shadow: 0 0 0 3px var(--bg); pointer-events: none; }
 .opts button[aria-pressed="true"] { color: var(--text); }
 .opts button[aria-pressed="true"][data-dark="1"] { color: var(--on-fill); }
 

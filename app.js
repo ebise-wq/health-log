@@ -2,7 +2,7 @@
    When you change anything here, bump VERSION below AND the cache name at the
    top of sw.js. The version in the corner is how you check a new build loaded. */
 
-var VERSION = "v1.32.0";
+var VERSION = "v1.33.0";
 var STORE_KEY = "sr-daily-log-v1";
 var STORE_VERSION = 3;
 
@@ -595,6 +595,7 @@ function section(title, kids) {
    getValue/setValue work on whatever record the screen is editing.
    baselineOf returns the marked baseline, or undefined on the Baseline screen. */
 function ratingRow(item, getValue, setValue, baselineOf, onAfter) {
+  if (item.half) return sliderRow(item, getValue, setValue, baselineOf, onAfter);
   var max = item.max === undefined ? 3 : item.max;
   var ramp = item.ramp || RAMP4;
   var dot = el("span", { class: "dot", text: "●" });
@@ -615,37 +616,11 @@ function ratingRow(item, getValue, setValue, baselineOf, onAfter) {
       opts.appendChild(b);
     })(n);
   }
-  /* A half step, for an item that allows one: a value between two numbers is
-     the lower number plus this. Tapping it again takes the half off. */
-  var halfBtn = null;
-  if (item.half) {
-    halfBtn = el("button", { type: "button", class: "half", "aria-pressed": "false", text: "+\u00BD",
-      "aria-label": "Add a half",
-      onclick: function () {
-        var v = getValue();
-        if (v === undefined || v === null || v === "") v = 0.5;
-        else if (v % 1) v = Math.floor(v);
-        else if (v < max) v = v + 0.5;
-        else return;
-        setValue(v); refresh(); if (onAfter) onAfter();
-      } });
-    opts.appendChild(halfBtn);
-  }
   function refresh() {
     var value = getValue();
     var base = baselineOf ? baselineOf() : undefined;
-    var whole = typeof value === "number" ? Math.floor(value) : value;
-    if (halfBtn) {
-      var hasHalf = typeof value === "number" && value % 1 !== 0;
-      var hFill = hasHalf ? rampAt(ramp, value) : "";
-      halfBtn.setAttribute("aria-pressed", hasHalf ? "true" : "false");
-      halfBtn.setAttribute("data-dark", hasHalf && inkFor(hFill, value) === "#14181C" ? "1" : "0");
-      halfBtn.style.background = hFill;
-      halfBtn.style.borderColor = hFill;
-      halfBtn.disabled = value === max;
-    }
     buttons.forEach(function (b, n) {
-      var on = whole === n;
+      var on = value === n;
       var isBase = base === n;
       b.setAttribute("aria-pressed", on ? "true" : "false");
       b.setAttribute("data-baseline", isBase ? "1" : "0");
@@ -681,10 +656,106 @@ function ratingRow(item, getValue, setValue, baselineOf, onAfter) {
     for (var k = 0; k <= max; k++) {
       anchors.appendChild(el("span", { text: item.scale[k] === undefined ? "" : item.scale[k] }));
     }
-    if (halfBtn) anchors.appendChild(el("span", { class: "half" }));
     kids.push(anchors);
   }
   return { el: el("div", { class: "row" }, kids), refresh: refresh };
+}
+
+/* A 0..max scale in half steps, as a slider: a big dot with its number for
+   each whole step, a small dot for each half between. Tap a dot or drag
+   along the track. A drag that turns into a page scroll puts the value back.
+   Arrow keys move it half a step. */
+function sliderRow(item, getValue, setValue, baselineOf, onAfter) {
+  var max = item.max === undefined ? 3 : item.max;
+  var ramp = item.ramp || RAMP6;
+  var dot = el("span", { class: "dot", text: "\u25CF" });
+  var label = el("div", { class: "label" }, [el("span", { text: item.label }), dot]);
+  var track = el("div", { class: "sl-track" });
+  var fill = el("div", { class: "sl-fill" });
+  track.appendChild(fill);
+  var stops = [];
+  for (var k = 0; k <= max * 2; k++) {
+    var v = k / 2, pct = 100 * v / max;
+    var d = el("span", { class: "sl-dot " + (k % 2 ? "sl-small" : "sl-big"), style: { left: pct + "%" } });
+    stops.push(d);
+    track.appendChild(d);
+    if (k % 2 === 0) {
+      track.appendChild(el("span", { class: "sl-num", style: { left: pct + "%" }, text: String(v) }));
+      if (item.scale && item.scale[v] !== undefined) {
+        track.appendChild(el("span", { class: "sl-word", style: { left: pct + "%" }, text: item.scale[v] }));
+      }
+    }
+  }
+  var thumb = el("span", { class: "sl-thumb" });
+  track.appendChild(thumb);
+  var box = el("div", { class: "sl", tabindex: "0", role: "slider", "aria-label": item.label,
+    "aria-valuemin": "0", "aria-valuemax": String(max) }, [track]);
+
+  function paint(value) {
+    var base = baselineOf ? baselineOf() : undefined;
+    var has = typeof value === "number";
+    var col = has ? rampAt(ramp, value) : "";
+    thumb.style.display = has ? "" : "none";
+    fill.style.display = has && value > 0 ? "" : "none";
+    if (has) {
+      thumb.style.left = (100 * value / max) + "%";
+      thumb.style.background = col;
+      thumb.style.color = inkFor(col, value);
+      thumb.textContent = String(value);
+      fill.style.width = (100 * value / max) + "%";
+      fill.style.background = col;
+      box.setAttribute("aria-valuenow", String(value));
+      box.setAttribute("aria-valuetext", String(value) +
+        (item.scale && item.scale[value] ? " " + item.scale[value] : ""));
+    } else {
+      box.removeAttribute("aria-valuenow");
+      box.setAttribute("aria-valuetext", "not set");
+    }
+    stops.forEach(function (s, k) {
+      s.classList.toggle("on", has && k / 2 <= value);
+      s.classList.toggle("base", base === k / 2);
+      s.style.background = has && k / 2 <= value ? col : "";
+    });
+    var off = base !== undefined && has && value !== base;
+    dot.style.display = off ? "" : "none";
+    if (off) dot.style.color = (item.higherIsBetter ? value < base : value > base) ? "var(--accent)" : "#6FAF87";
+  }
+  function refresh() { paint(getValue()); }
+  function commit(v) {
+    if (v === getValue()) { paint(v); return; }
+    setValue(v); paint(v); if (onAfter) onAfter();
+  }
+  function at(ev) {
+    var r = track.getBoundingClientRect();
+    var f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+    return Math.round(f * max * 2) / 2;
+  }
+  var dragging = false, live = null;
+  box.addEventListener("pointerdown", function (ev) {
+    dragging = true; live = at(ev); paint(live);
+    try { box.setPointerCapture(ev.pointerId); } catch (e) { /* older browsers */ }
+  });
+  box.addEventListener("pointermove", function (ev) {
+    if (!dragging) return;
+    var v = at(ev);
+    if (v !== live) { live = v; paint(v); }
+  });
+  box.addEventListener("pointerup", function () {
+    if (!dragging) return;
+    dragging = false; commit(live);
+  });
+  box.addEventListener("pointercancel", function () { dragging = false; refresh(); });
+  box.addEventListener("keydown", function (ev) {
+    var v = getValue(), by = 0;
+    if (ev.key === "ArrowRight" || ev.key === "ArrowUp") by = 0.5;
+    else if (ev.key === "ArrowLeft" || ev.key === "ArrowDown") by = -0.5;
+    else return;
+    ev.preventDefault();
+    if (typeof v !== "number") v = by > 0 ? -0.5 : 0.5;
+    commit(Math.max(0, Math.min(max, v + by)));
+  });
+  refresh();
+  return { el: el("div", { class: "row" }, [label, box]), refresh: refresh };
 }
 
 /* Stepper buttons so a value needs no keyboard in the dark; the field still
